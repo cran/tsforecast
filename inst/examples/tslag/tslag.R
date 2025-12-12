@@ -1,0 +1,1 @@
+tslag(airport$Travellers, lag = 12)

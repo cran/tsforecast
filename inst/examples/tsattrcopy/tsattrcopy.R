@@ -1,0 +1,1 @@
+tsattrcopy(airport$Travellers[1:60], airport$Travellers)

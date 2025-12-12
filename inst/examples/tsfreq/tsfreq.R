@@ -1,0 +1,1 @@
+tsfreq(x = airport$Travellers)
