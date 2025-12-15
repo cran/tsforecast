@@ -443,7 +443,7 @@ tsarima <- function(x, order = c(0L, 0L, 0L), seasonal = list(order = c(0L, 0L, 
 {
     if (train.prop > 1 | train.prop < 0)
     {
-        print("Proportion of training data must be between 0 and 1. Automatically set to 1.")
+        warning("Proportion of training data must be between 0 and 1. Automatically set to 1.")
         train.prop <- 1
     }
     method <- match.arg(method)
@@ -642,15 +642,7 @@ summary.tsarima <- function(object, digits = max(3L, getOption("digits") - 3L), 
         cat("\n")
     }
     cat("Error measures:\n")
-    err.tab <- as.data.frame(object$error)
-    rownames(err.tab) <- paste0("Training set (", object$train.prop * 100, "%)")
-    if (object$train.prop < 1)
-    {
-        errtest.tab <- as.data.frame(object$model.test$error)
-        rownames(errtest.tab) <- paste0("Testing set (", (1 - object$train.prop) * 100, "%)")
-        err.tab <- rbind(err.tab, errtest.tab)
-    }
-    print(err.tab, digits = digits, print.gap = 2)
+    print(tsmodeleval(object), digits = digits, print.gap = 2)
     cat("\n")
     invisible(object)
 }
@@ -819,11 +811,14 @@ tsesm <- function(x, order = c("simple", "holt", "holt-winters"), damped = FALSE
     xmodel <- x
     if (!is.null(seasonal.period))
     {
-        if(seasonal.period != frequency(xmodel)) {xmodel <- ts(x, start = start(x), frequency = seasonal.period)}
+        if(seasonal.period != frequency(xmodel)) 
+        {
+            xmodel <- ts(x, start = start(x), frequency = seasonal.period)
+        }
     }
     trainlen <- round(train.prop * length(xmodel), 0)
     xdate_train <- xdate$time[1:trainlen]
-    xmodel_train <- tsattrcopy(x = xmodel[1:trainlen], x.orig = x)
+    xmodel_train <- tsattrcopy(x = xmodel[1:trainlen], x.orig = xmodel)
     if (order == "simple")
     {
         arglist <- list(y = xmodel_train, initial = initial, alpha = alpha, lambda = lambda, biasadj = biasadj)
@@ -838,17 +833,19 @@ tsesm <- function(x, order = c("simple", "holt", "holt-winters"), damped = FALSE
     }
     esm.fun <- if (order == "simple") {"ses"} else if (order == "holt") {"holt"} else if (order == "holt-winters") {"hw"}
     esm <- suppressWarnings(suppressMessages(do.call(esm.fun, arglist)))
+    esm$model$states <- ts(esm$model$states, start = start(x) - deltat(x), frequency = frequency(x))
     parincl <- c("par", "m", "components", "states", "initstate", "sigma2")
     if (initial == "optimal") {parincl <- c(parincl, "loglik", "aic", "bic", "aicc")}
-    attributes(esm$fitted) <- attributes(xmodel_train)
-    attributes(esm$residuals) <- attributes(xmodel_train)
+    xmodel_train <- tsattrcopy(xmodel_train, x.orig = x)
+    xres <- tsattrcopy(esm$residuals, x.orig = x)
+    xfit <- tsattrcopy(esm$fitted, x.orig = x)
     x.name <- if (is.null(tsname(x))) {deparse1(substitute(x))} else {tsname(x)}
     esm.out <- esm$model[parincl]
     names(esm.out)[names(esm.out) == "par"] <- "coef"
     out <- c(esm.out, list(x = x, x.time = xdate$time, x.timegap = xdate$frequency, x.name = x.name, 
-                           train.prop = train.prop, x.used = xmodel_train, x.time.used = xdate_train, fitted = esm$fitted, residuals = esm$residuals,
+                           train.prop = train.prop, x.used = xmodel_train, x.time.used = xdate_train, fitted = xfit, residuals = xres,
                            damped = damped, initial = initial, type = type, exp.trend = exp.trend, lambda = lambda, biasadj = biasadj, 
-                           series = series, call = match.call(), error = tsmodeleval(list(x = x, fitted = esm$fitted))))
+                           series = series, call = match.call(), error = tsmodeleval(list(x = xmodel_train, fitted = xfit))))
     if (train.prop < 1)
     {
         testlen <- length(xmodel) - trainlen
@@ -989,15 +986,7 @@ summary.tsesm <- function(object, ...)
         cat("\nsigma^2 estimated as ", format(object$sigma2, digits = digits), "\n\n", sep = "")
     }
     cat("Error measures:\n")
-    err.tab <- as.data.frame(object$error)
-    rownames(err.tab) <- paste0("Training set (", object$train.prop * 100, "%)")
-    if (object$train.prop < 1)
-    {
-        errtest.tab <- as.data.frame(object$model.test$error)
-        rownames(errtest.tab) <- paste0("Testing set (", (1 - object$train.prop) * 100, "%)")
-        err.tab <- rbind(err.tab, errtest.tab)
-    }
-    print(err.tab, digits = digits, print.gap = 2)
+    print(tsmodeleval(object), digits = digits, print.gap = 2)
     cat("\n")
     invisible(object)
 }
@@ -1212,7 +1201,6 @@ tsccov <- function(...)
 
 ##### Print tsacf Object #####
 #' @rdname tsacf
-# @param object an `\code{tsacf}` object resulting from a \code{tsacf}, \code{tspacf}, or \code{tsacov} call.
 #' @param digits number of decimal digits displayed in the results.
 #' @param ... other printing or plotting parameters.
 #' @exportS3Method 
@@ -1331,7 +1319,7 @@ plot.tsacf <- function(x, title = NULL, ...)
 #' @importFrom stats loess
 #' @importFrom stats aggregate
 #' @export
-tsdecomp <- function(x, type = c("additive", "multiplicative"), trend.method = c("lm", "loess"), tcc.order = 3, x.name = NULL, show.plot = TRUE)
+tsdecomp <- function(x, type = c("additive", "multiplicative"), trend.method = c("lm", "loess"), tcc.order = 3, x.name = NULL, show.plot = TRUE, ...)
 {
     type <- match.arg(type)
     trend.method <- match.arg(trend.method)
@@ -1384,53 +1372,79 @@ tsdecomp <- function(x, type = c("additive", "multiplicative"), trend.method = c
     out <- c(list(x = x, x.time = xtime$time, x.timegap = xtime$frequency, x.name = x.name), numcomp, if (sc.exist) {list(seasonal.effect = sc.effect)}, list(type = type))
     if (show.plot)
     {
-        plot.tsdecomp(out)
+        plot.tsdecomp(out, ...)
     }
     return(structure(out, class = "tsdecomp"))
 }
 
 ##### Print Time Series Decomposition #####
 #' @rdname tsdecomp
+#' @param decomp.incl time series components that should be printed. Available options are `\code{all}` (default), `\code{tc}` (trend), `\code{tcc}` (trend-cycles), `\code{tcc}` (cycles), `\code{detrend}`, `\code{ic}` (irregular), `\code{scadj}` (seasonally adjusted), `\code{sc}` (seasonality), and `\code{sceffect}` (seasonal effects).
 #' @exportS3Method 
-print.tsdecomp <- function(x, ...)
+print.tsdecomp <- function(x, decomp.incl = c("all", "tc", "tcc", "cc", "detrend", "ic", "scadj", "sc", "sceffect"), ...)
 {
-    cat("Trend:\n")
-    cat("======\n")
-    print(x$trend)
-    cat("\nCycles:\n")
-    cat("=======\n")
-    print(x$cycle)
-    cat("\nTrend-Cycles:\n")
-    cat("=============\n")
-    print(x$trend.cycle)
-    if ("seasonal" %in% names(x))
+    if (any(c("all", "tc") %in% decomp.incl))
     {
-        cat("\nSeasonality:\n")
-        cat("============\n")
-        print(x$seasonal)
+        cat("Trend:\n")
+        cat("======\n")
+        print(x$trend)
     }
-    cat("\nIrregular:\n")
-    cat("==========\n")
-    print(x$random)
-    cat("\nDetrended:\n")
-    cat("==========\n")
-    print(x$detrended)
-    if ("seasonal.adjusted" %in% names(x)) 
+    if (any(c("all", "cc") %in% decomp.incl))
     {
-        cat("\nSeasonally Adjusted:\n")
-        cat("====================\n")
-        print(x$seasonal.adjusted)
+        cat("\nCycles:\n")
+        cat("=======\n")
+        print(x$cycle)
     }
-    if ("seasonal.effect" %in% names(x)) 
+    if (any(c("all", "tcc") %in% decomp.incl))
     {
-        cat("\nSeasonal Effects:\n")
-        cat("=================\n")
-        print(x$seasonal.effect)
+        cat("\nTrend-Cycles:\n")
+        cat("=============\n")
+        print(x$trend.cycle)
+    }
+    if (any(c("all", "sc") %in% decomp.incl))
+    {
+        if ("seasonal" %in% names(x))
+        {
+            cat("\nSeasonality:\n")
+            cat("============\n")
+            print(x$seasonal)
+        }
+    }
+    if (any(c("all", "ic") %in% decomp.incl))
+    {
+        cat("\nIrregular:\n")
+        cat("==========\n")
+        print(x$random)
+    }
+    if (any(c("all", "detrend") %in% decomp.incl))
+    {
+        cat("\nDetrended:\n")
+        cat("==========\n")
+        print(x$detrended)
+    }
+    if (any(c("all", "scadj") %in% decomp.incl))
+    {
+        if ("seasonal.adjusted" %in% names(x)) 
+        {
+            cat("\nSeasonally Adjusted:\n")
+            cat("====================\n")
+            print(x$seasonal.adjusted)
+        }
+    }
+    if (any(c("all", "sceffect") %in% decomp.incl))
+    {
+        if ("seasonal.effect" %in% names(x)) 
+        {
+            cat("\nSeasonal Effects:\n")
+            cat("=================\n")
+            print(x$seasonal.effect)
+        }
     }
 }
 
 ##### Generate Plots for Time Series Decomposition #####
 #' @rdname tsdecomp
+#' @param plot.incl time series components that should be plotted. Available options are `\code{all}` (default), `\code{tc}` (trend), `\code{tcc}` (trend-cycles), `\code{tcc}` (cycles), `\code{detrend}`, `\code{ic}` (irregular), `\code{scadj}` (seasonally adjusted), `\code{sc}` (seasonality), and `\code{sceffect}` (seasonal effects). Ignored if \code{show.plot = FALSE}.
 #' @param ... parameter values that can affect the time series decomposition plots.
 #' @details The function `\code{plot}` generates the following plots: 
 #' \tabular{lcl}{\code{Trend} \tab \tab a time series line plot together with a trend line. \cr
@@ -1443,17 +1457,21 @@ print.tsdecomp <- function(x, ...)
 #' \code{Seasonal Effect} \tab \tab a line plot of the overall estimated effect of each season in the time series. \cr
 #' }
 #' @exportS3Method 
-plot.tsdecomp <- function(x, ...)
+plot.tsdecomp <- function(x, plot.incl = c("all", "tc", "tcc", "cc", "detrend", "ic", "scadj", "sc", "sceffect"), ...)
 {
     pwidth <- 0.7
-    tslineplot(x$x, pred = x$trend, title = "Trend", x.name = x$x.name, pred.name = "Trend", pred.lwidth = pwidth)
-    tslineplot(x$x, pred = x$trend.cycle, title = "Trend-Cycles", x.name = x$x.name, pred.name = "Trend & Cycles", pred.lwidth = pwidth)
-    tslineplot(x$cycle, title = "Cycles", x.name = x$x.name, x.lwidth = pwidth, x.col = "steelblue4")
-    tslineplot(x$detrended, title = "Detrended", x.name = x$x.name, pred.name = "Series without trend", x.col = "steelblue4", x.lwidth = pwidth)
-    tslineplot(x$random, title = "Irregular", x.name = x$x.name, pred.name = "Irregular Component", x.col = "steelblue4", x.lwidth = pwidth)
-    if ("seasonal.adjusted" %in% names(x)) {tslineplot(x$x, pred = x$seasonal.adjusted, title = "Seasonally Adjusted", x.name = x$x.name, pred.name = "Series without Seasonality", pred.lwidth = pwidth)}
-    if ("seasonal" %in% names(x)) {tslineplot(x$seasonal, title = "Seasonal", x.name = x$x.name, pred.name = "Seasonality", x.col = "steelblue4", x.lwidth = pwidth)}
-    if ("seasonal.effect" %in% names(x)) {tslineplot(x = x$seasonal.effect$Effect, t = x$seasonal.effect$Season, title = "Seasonal Effect", x.name = x$x.name, pred.name = "Seasonal Effects", t.name = "Seasons", x.lwidth = pwidth, x.col = "steelblue4", t.numbreak = 12, t.text.angle = 0)}
+    if (any(c("all", "tc") %in% plot.incl)) {tslineplot(x$x, pred = x$trend, title = "Trend", x.name = x$x.name, pred.name = "Trend", pred.lwidth = pwidth)}
+    if (any(c("all", "tcc") %in% plot.incl)) {tslineplot(x$x, pred = x$trend.cycle, title = "Trend-Cycles", x.name = x$x.name, pred.name = "Trend & Cycles", pred.lwidth = pwidth)}
+    if (any(c("all", "cc") %in% plot.incl)) {tslineplot(x$cycle, title = "Cycles", x.name = x$x.name, x.lwidth = pwidth, x.col = "steelblue4")}
+    if (any(c("all", "detrend") %in% plot.incl)) {tslineplot(x$detrended, title = "Detrended", x.name = x$x.name, pred.name = "Series without trend", x.col = "steelblue4", x.lwidth = pwidth)}
+    if (any(c("all", "ic") %in% plot.incl)) {tslineplot(x$random, title = "Irregular", x.name = x$x.name, pred.name = "Irregular Component", x.col = "steelblue4", x.lwidth = pwidth)}
+    if ((any(c("all", "scadj") %in% plot.incl)) & ("seasonal.adjusted" %in% names(x))) {tslineplot(x$x, pred = x$seasonal.adjusted, title = "Seasonally Adjusted", x.name = x$x.name, pred.name = "Series without Seasonality", pred.lwidth = pwidth)}
+    if ((any(c("all", "sc") %in% plot.incl)) & ("seasonal" %in% names(x))) {tslineplot(x$seasonal, title = "Seasonal", x.name = x$x.name, pred.name = "Seasonality", x.col = "steelblue4", x.lwidth = pwidth)}
+    if ((any(c("all", "sceffect") %in% plot.incl)) & ("seasonal.effect" %in% names(x))) {tslineplot(x = x$seasonal.effect$Effect, t = x$seasonal.effect$Season, title = "Seasonal Effect", x.name = x$x.name, pred.name = "Seasonal Effects", t.name = "Seasons", x.lwidth = pwidth, x.col = "steelblue4", t.numbreak = 12, t.text.angle = 0)}
+    if (all(plot.incl %in% c("all", "tc", "tcc", "cc", "detrend", "ic", "scadj", "sc", "sceffect")) == FALSE)
+    {
+        warning("Some of the `plot.incl` entries are inappropriate. Corresponding plots omitted.")
+    }
 }
 
 ##### Time Series Exploration #####
@@ -1523,7 +1541,7 @@ tsexplore <- function(x, show.plot = TRUE, x.name = NULL, mu = 0, adf.lag = 0, l
     out <- c(list(x = x, x.time = xtime$time, x.timegap = xtime$frequency, x.name = x.name), list(stats = xcomp.stat))
     if (show.plot)
     {
-        plot_arg <- c("histbin", "lwidth", "pwidth", "x.col", "extra.col")
+        plot_arg <- c("histbin", "lwidth", "pwidth", "x.col", "extra.col", if ("plot.incl" %in% argnam) {"plot.incl"})
         user_plot_arglist <- arglist[plot_arg[plot_arg %in% argnam]]
         plot_arglist <- c(list(x = out), user_plot_arglist)
         do.call(plot.tsexplore, args = plot_arglist)
@@ -1539,68 +1557,88 @@ tsexplore <- function(x, show.plot = TRUE, x.name = NULL, mu = 0, adf.lag = 0, l
 #' @param pwidth size of the markers in the QQ plot. Default is \code{0.7}.
 #' @param x.col line colour of the time series line plot. Default is `\code{darkgrey}`.
 #' @param extra.col colour of extra information in the plots. Default is `\code{red}`.
+#' @param plot.incl time series components that should be plotted. Available options are `\code{all}` (default), `\code{line}` (line plot), `\code{hist}` (histogram), `\code{box}` (boxplot), `\code{qq}` (QQ plot), `\code{acf}` (ACF plot), and `\code{pacf}` (PACF plot). Ignored if \code{show.plot = FALSE}.
 #' @param ... parameter values that can affect the plots created for time series exploration.
 #' @exportS3Method 
 plot.tsexplore <- function(x, trend = c("linear", "smooth", "none"), histbin = 15, 
-                           lwidth = 0.7, pwidth = 0.7, x.col = "darkgrey", extra.col = "red", ...)
+                           lwidth = 0.7, pwidth = 0.7, x.col = "darkgrey", extra.col = "red", 
+                           plot.incl = c("all", "line", "hist", "box", "qq", "acf", "pacf"), ...)
 {
     trend <- match.arg(trend)
-    x.lplot <- tslineplot(x = x$x, t = x$x.time, x.name = x$x.name, trend = trend, x.lwidth = lwidth, pred.lwidth = lwidth, x.col = x.col, pred.col = extra.col)
-    x.hist <- tshistogram(x = x$x, density = TRUE, x.name = x$x.name, density.lwidth = lwidth, x.col = x.col, density.col = extra.col, bins = histbin)
-    x.bplot <- tsboxplot(x = x$x, x.name = x$x.name, x.col = x.col, mean.col = extra.col)
-    x.qqplot <- tsqqplot(x = x$x, x.name = x$x.name, qq.lwidth = lwidth, qq.pwidth = pwidth, qq.col = x.col, qqline.col = extra.col)
+    if (any(c("all", "line") %in% plot.incl)) {tslineplot(x = x$x, t = x$x.time, x.name = x$x.name, trend = trend, x.lwidth = lwidth, pred.lwidth = lwidth, x.col = x.col, pred.col = extra.col)}
+    if (any(c("all", "hist") %in% plot.incl)) {tshistogram(x = x$x, density = TRUE, x.name = x$x.name, density.lwidth = lwidth, x.col = x.col, density.col = extra.col, bins = histbin)}
+    if (any(c("all", "box") %in% plot.incl)) {tsboxplot(x = x$x, x.name = x$x.name, x.col = x.col, mean.col = extra.col)}
+    if (any(c("all", "qq") %in% plot.incl)) {tsqqplot(x = x$x, x.name = x$x.name, qq.lwidth = lwidth, qq.pwidth = pwidth, qq.col = x.col, qqline.col = extra.col)}
     lag.max <- length(x$stats$autocorrelation$pacf)
-    x.acfplot <- tsacf(x = x$x, x.name = x$x.name, lag.max = lag.max)
-    x.pacfplot <- tspacf(x = x$x, x.name = x$x.name, lag.max = lag.max)
+    if (any(c("all", "acf") %in% plot.incl)) {tsacf(x = x$x, x.name = x$x.name, lag.max = lag.max)}
+    if (any(c("all", "pacf") %in% plot.incl)) {tspacf(x = x$x, x.name = x$x.name, lag.max = lag.max)}
+    if (all(plot.incl %in% c("all", "line", "hist", "box", "qq", "acf", "pacf")) == FALSE)
+    {
+        warning("Some of the `plot.incl` entries are inappropriate. Corresponding plots omitted.")
+    }
 }
 
 ##### Print Time Series Exploration #####
 #' @rdname tsexplore
 #' @param digits the number of significant digits.
+#' @param stats.incl time series statistics that should be printed. Available options are `\code{all}` (default), `\code{stats}` (statistics), `\code{var}` (variability), `\code{qtls}` (quantiles), `\code{acf}` (autocorrelation), and `\code{tests}` (tests).
 #' @exportS3Method 
-print.tsexplore <- function(x, digits = max(3L, getOption("digits") - 3L), ...)
+print.tsexplore <- function(x, digits = max(3L, getOption("digits") - 3L), stats.incl = c("all", "stats", "var", "qtls", "acf", "tests"), ...)
 {
     scipenval <- getOption("scipen")
     options(scipen = 999)
     on.exit(options(scipen = scipenval))
     stats <- x$stats
-    graphs <- x$graphs
     cat("\nSeries: ", x$x.name, "\n", sep = "")
     cat("\nNumber of Observations:       ", stats$statistics$n, "\n", sep = " ")
     cat("Number of Valid Observations: ", stats$statistics$nvalid, "\n", sep = " ")
     if (!is.null(stats))
     {
-        cat("\nStatistics:\n", rep("=", 11L),"\n", sep = "")
-        stat <- as.data.frame(stats$statistics[names(stats$statistics) != c("n", "nvalid")])
-        colnames(stat) <- c("Sum", "Mean", "Median", "Skewness", "Kurtosis", "Coef. of Variation")
-        print(stat, print.gap = 4L, digits = digits, row.names = FALSE)
-        cat("\nVariability:\n", rep("=", 12L),"\n", sep = "")
-        disp <- data.frame(stats$variability)
-        colnames(disp) <- c("Variance", "Std. Deviation", "Range", "Interquartile Range")
-        print(disp, row.names = FALSE, print.gap = 4L, digits = digits)
-        cat("\nQuantiles:\n", rep("=", 10L),"\n", sep = "")
-        qrtl <- data.frame(stats$quantiles)
-        colnames(qrtl) <- c("Minimum", "1st Quartile", "Median", "3rd Quartile", "Maximum")
-        print(qrtl, row.names = FALSE, print.gap = 4L, digits = digits)
-        cat("\nAutocorrelation:\n", rep("=", 16L),"\n", sep = "")
-        acf <- data.frame(stats$autocorrelation$acf, c(NA, stats$autocorrelation$pacf))
-        colnames(acf) <- c("ACF", "PACF")
-        print(round(t(acf), digits), print.gap = 3L)
-        cat("\nTests:\n", rep("=", 6L),"\n", sep = "")
-        ltest <- stats$tests$location
-        ntest <- stats$tests$normality
-        stest <- stats$tests$stationarity
-        itest <- stats$tests$independence
-        test <- data.frame(type = c(paste("t-Test ", "(mu=", stats$tests$location$null.value, ")", sep = ""), "Shapiro-Wilk", "Augmented Dickey-Fuller", "Ljung-Box"), statistic = c(ltest$statistic, ntest$statistic, stest$statistic, itest$statistic), p.value = round(c(ltest$p.value, ntest$p.value, stest$p.value, itest$p.value), digits))
-        colnames(test) <- c("Test", "Statistic", "p-Value")
-        rownames(test) <- c("Location", "Normality", "Stationarity", "Independence")
-        print(test, print.gap = 4L, digits = digits, right = FALSE)
+        if (any(c("all", "stats") %in% stats.incl)) 
+        {
+            cat("\nStatistics:\n", rep("=", 11L),"\n", sep = "")
+            stat <- as.data.frame(stats$statistics[names(stats$statistics) != c("n", "nvalid")])
+            colnames(stat) <- c("Sum", "Mean", "Median", "Skewness", "Kurtosis", "Coef. of Variation")
+            print(stat, print.gap = 4L, digits = digits, row.names = FALSE)
+        }
+        if (any(c("all", "var") %in% stats.incl))
+        {
+            cat("\nVariability:\n", rep("=", 12L),"\n", sep = "")
+            disp <- data.frame(stats$variability)
+            colnames(disp) <- c("Variance", "Std. Deviation", "Range", "Interquartile Range")
+            print(disp, row.names = FALSE, print.gap = 4L, digits = digits)
+        }
+        if (any(c("all", "qtls") %in% stats.incl))
+        {
+            cat("\nQuantiles:\n", rep("=", 10L),"\n", sep = "")
+            qrtl <- data.frame(stats$quantiles)
+            colnames(qrtl) <- c("Minimum", "1st Quartile", "Median", "3rd Quartile", "Maximum")
+            print(qrtl, row.names = FALSE, print.gap = 4L, digits = digits)
+        }
+        if (any(c("all", "acf") %in% stats.incl))
+        {
+            cat("\nAutocorrelation:\n", rep("=", 16L),"\n", sep = "")
+            acf <- data.frame(stats$autocorrelation$acf, c(NA, stats$autocorrelation$pacf))
+            colnames(acf) <- c("ACF", "PACF")
+            print(round(t(acf), digits), print.gap = 3L)
+        }
+        if (any(c("all", "tests") %in% stats.incl))
+        {
+            cat("\nTests:\n", rep("=", 6L),"\n", sep = "")
+            ltest <- stats$tests$location
+            ntest <- stats$tests$normality
+            stest <- stats$tests$stationarity
+            itest <- stats$tests$independence
+            test <- data.frame(type = c(paste("t-Test ", "(mu=", stats$tests$location$null.value, ")", sep = ""), "Shapiro-Wilk", "Augmented Dickey-Fuller", "Ljung-Box"), statistic = c(ltest$statistic, ntest$statistic, stest$statistic, itest$statistic), p.value = round(c(ltest$p.value, ntest$p.value, stest$p.value, itest$p.value), digits))
+            colnames(test) <- c("Test", "Statistic", "p-Value")
+            rownames(test) <- c("Location", "Normality", "Stationarity", "Independence")
+            print(test, print.gap = 4L, digits = digits, right = FALSE)
+        }
         cat("\n")
     }
-    if (!is.null(graphs))
+    if (all(stats.incl %in% c("all", "stats", "var", "qtls", "acf", "tests")) == FALSE)
     {
-        for (j in graphs)
-            suppressWarnings(print(j))
+        warning("Some of the `stats.incl` entries are inappropriate. Corresponding outputs omitted.")
     }
 }
 
@@ -2303,21 +2341,54 @@ plot.tsmovav <- function(x, title = NULL, ...)
 #' @export
 tsmodeleval <- function(object)
 {
-    logts <- "log" %in% names(object)
-    x <- if (logts) {log(object$x)} else {object$x}
-    fitted <- object$fitted
-    xfreq <- max(frequency(x), frequency(fitted))
-    error <- x - fitted
-    me <- mean(error, na.rm = TRUE)
-    mae <- mean(abs(error), na.rm = TRUE)
-    rmse <- sqrt(mean(error ^ 2L, na.rm = TRUE))
-    mpe <- mean(error / x, na.rm = TRUE) * 100
-    mape <- mean(abs(error) / x, na.rm = TRUE) * 100
-    mase <- mean(abs(error), na.rm = TRUE) / mean(abs(diff(x)), na.rm = TRUE)
-    irseasonal <- c("day", "week", "min", "sec")
-    if (xfreq > 1 & !attr(x, "seasonal.cycle") %in% irseasonal) {mases <- mean(abs(error)) / mean(abs(diff(x, xfreq)))}
-    acf1 <- tsacf(error, lag.max = 1, show.plot = FALSE)
-    mfit <- c(list(ME = me, RMSE = rmse, MAE = mae, MPE = mpe, MAPE = mape, MASE = mase), if (xfreq > 1 & !attr(x, "seasonal.cycle") %in% irseasonal) {list(MASE.S = mases)}, list(ACF1 = acf1$acf[2]))
+    if (inherits(object, "tsarima") | inherits(object, "tsesm"))
+    {
+        mfit <- object$error
+        rownames(mfit) <- paste0("Training set (", object$train.prop * 100, "%)")
+        if ("model.test" %in% names(object))
+        {
+            testfit <- object$model.test$error.test
+            rownames(testfit) <- paste0("Testing set  (", (1 - object$train.prop) * 100, "%)")
+            mfit <- rbind(mfit, testfit)
+        }
+    }
+    else
+    {
+        if ("x.used" %in% names(object))
+        {
+            x <- object$x.used
+        }
+        else
+        {
+            logts <- "log" %in% names(object)
+            x <- if (logts) {log(object$x)} else {object$x}
+        }
+        if ("fitted" %in% names(object))
+        {
+            fitted <- object$fitted
+        }
+        else if ("pred" %in% names(object))
+        {
+            fitted <- object$pred
+        }
+        else
+        {
+            stop("Model evaluation is not possible. Fitted values missing.")
+        }
+        xfreq <- max(frequency(x), frequency(fitted))
+        error <- x - fitted
+        me <- mean(error, na.rm = TRUE)
+        mae <- mean(abs(error), na.rm = TRUE)
+        rmse <- sqrt(mean(error ^ 2L, na.rm = TRUE))
+        mpe <- mean(error / x, na.rm = TRUE) * 100
+        mape <- mean(abs(error) / x, na.rm = TRUE) * 100
+        mase <- mean(abs(error), na.rm = TRUE) / mean(abs(diff(x)), na.rm = TRUE)
+        irseasonal <- c("day", "week", "min", "sec")
+        if (xfreq > 1 & !attr(x, "seasonal.cycle") %in% irseasonal) {mases <- mean(abs(error)) / mean(abs(diff(x, xfreq)))}
+        acf1 <- tsacf(error, lag.max = 1, show.plot = FALSE)
+        mfit <- as.data.frame(c(if ("aic" %in% names(object)) {list(AIC = object$aic)}, list(ME = me, RMSE = rmse, MAE = mae, MPE = mpe, MAPE = mape, MASE = mase), if (xfreq > 1 & !attr(x, "seasonal.cycle") %in% irseasonal) {list(MASE.S = mases)}, list(ACF1 = acf1$acf[2])))
+        rownames(mfit) <- "Error"
+    }
     return(mfit)
 }
 
