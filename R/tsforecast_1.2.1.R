@@ -468,16 +468,6 @@ tsarima <- function(x, order = c(0L, 0L, 0L), seasonal = list(order = c(0L, 0L, 
     {
         xnam <- NULL
     }
-    if (include.const) 
-    {
-        intercept <- rep(1, norig)
-        xreg_model <- cbind(xreg, intercept)
-        colnames(xreg_model) <- c(xnam, "intercept")
-    }
-    else
-    {
-        xreg_model <- xreg    
-    }
     if (!is.list(seasonal)) 
     {
         if (xfreq <= 1) 
@@ -491,6 +481,17 @@ tsarima <- function(x, order = c(0L, 0L, 0L), seasonal = list(order = c(0L, 0L, 
             if (norig <= order[2L] + seasonal$order[2L] * seasonal$period) {stop("Not enough data to fit the model")}
         }
     }
+    if (include.const) 
+    {
+        intercept <- driftx(x, order = order[2], order.D = seasonal$order[2], period = if(is.null(seasonal$period)) {xfreq} else {seasonal$period})
+        xreg_model <- cbind(xreg, intercept)
+        colnames(xreg_model) <- c(xnam, "intercept")
+    }
+    else
+    {
+        xreg_model <- xreg    
+    }
+    if (log) {xreg_model <- log(xreg_model)}
     if (include.const == TRUE && (order[2] + seasonal$order[2] > 0))
     {
         SSinit <- "Rossignol2011"
@@ -672,13 +673,19 @@ predict.tsarima <- function (object, n.ahead = 1L, newxreg = NULL, se.fit = TRUE
     arma <- object$arma
     coefs <- object$coef
     coefs[(grepl("ma", names(coefs)))] <- -coefs[(grepl("ma", names(coefs)))]
+    userlog <- if (is.null(log)) {FALSE} else {log}
     narma <- sum(arma[1L:4L])
     if (length(coefs) > narma) 
     {
         if (object$include.const) 
         {
-            newxreg <- cbind(newxreg, mean = rep(1, n.ahead))
+            newconst <- tail(driftx(rep(1, n + n.ahead), order = arma[6L], order.D = arma[7L], period = arma[5L]), n.ahead)
+            newxreg <- cbind(newxreg, mean = newconst)
             ncxreg <- ncxreg + 1L
+        }
+        if (userlog == TRUE | (is.null(log) & object$log == TRUE))
+        {
+            newxreg <- log(newxreg)
         }
         xm <- if (narma == 0) {drop(as.matrix(newxreg) %*% coefs)} else {drop(as.matrix(newxreg) %*% coefs[-(1L:narma)])}
     }
@@ -712,7 +719,6 @@ predict.tsarima <- function (object, n.ahead = 1L, newxreg = NULL, se.fit = TRUE
     {
         out <- list(pred = pred)
     }
-    if (is.null(log)) {userlog <- FALSE} else {userlog <- log}
     if (userlog == TRUE | (is.null(log) & object$log == TRUE))
     {
         userlog = TRUE
@@ -2003,11 +2009,11 @@ tsdiff <- function(x, lag = 1L, order = 1L, lag.D = 0L, order.D = 0L)
 {
     x.d <- x
     missnum <- 0L
+    if (missing(order) & missing(lag) & (!missing(order.D) | !missing(lag.D))) {lag <- order <- 0L}
     if (order.D > 0L & lag.D == 0L) {lag.D <- frequency(x)}
     if (order.D == 0L & lag.D > 0L) {order.D <- 1L}
     if (order > 0L & lag == 0L) {lag <- 1L}
     if (order == 0L & lag > 0L) {order <- 1L}
-    if (missing(order) & missing(lag) & (!missing(order.D) | !missing(lag.D))) {lag <- order <- 0L}
     orders <- list(d = order, D = order.D)
     lags <- list(d = lag, D = lag.D)
     for (j in 1L:length(orders))
@@ -2437,6 +2443,32 @@ tstimeformat <- function(x, timegap)
     }
     xtime <- paste0(format(x, format = format1), format2)
     return(xtime)
+}
+
+##### Calculate Drift Term #####
+driftx <- function(x, order = 0, order.D = 0, period = NULL)
+{
+    if (is.null(period)) {period <- frequency(x)}
+    n <- length(x)
+    const <- rep(1, n)
+    if (order.D > 0)
+    {
+        ncycle <- ceiling(n / period)
+        sconst <- rep(1, ncycle)
+        for (i in 1:order.D)
+        {
+            sconst <- cumsum(sconst)
+        }
+        const <- rep(sconst, each = period, length.out = n)
+    }
+    if (order > 0)
+    {
+        for (i in 1:order)
+        {
+            const <- cumsum(const)
+        }
+    }
+    return(const)
 }
 
 ##### Airport Dataset #####
