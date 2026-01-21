@@ -10,11 +10,13 @@
 #'   nobs.incl = NULL, 
 #'   log = NULL, 
 #'   newxreg = NULL, 
+#'   newxreg.est = c("none", "x", "auto.arima"), 
 #'   x.name = NULL, pred.name = "Forecasts", ...)
 #' @export
 tsforecast <- function(object, n.ahead = 1, alpha = 0.05, show.plot = TRUE,
                        forecast.incl = c("all", "forecast", "predict"), nobs.incl = NULL,
-                       log = NULL, newxreg = NULL, x.name = NULL, pred.name = "Forecasts", ...)
+                       log = NULL, newxreg = NULL, newxreg.est = c("none", "x", "auto.arima"), 
+                       x.name = NULL, pred.name = "Forecasts", ...)
 {
     UseMethod("tsforecast")
 }
@@ -32,6 +34,7 @@ tsforecast <- function(object, n.ahead = 1, alpha = 0.05, show.plot = TRUE,
 #' @param nobs.incl number of past observations for which the predicted values should be included in the output. If \code{forecast.incl} is set as "\code{forecast}", the value of this parameter will be ignored. Default is \code{NULL},
 #' @param log optional. A logical value indicating whether the forecasted values are log-transformed and should be inverted back to the original series scale. If the object is an \code{tsarima} model and this parameter is omitted, the value will be taken over by the settings of the model given in object. Default is \code{NULL} here.
 #' @param newxreg new values of the regressors. Only necessary if ARIMA model is built with independent variables.
+#' @param newxreg.est character strings to indicate how the new values of the regressors in an ARIMAX model should be estimated in case they are not yet available. If \code{newxreg} is not \code{NULL}, this argument will be ignored. Available options are `\code{none}`, `\code{x}`, and `\code{auto.arima}`. The option `\code{none}` means that no estimation is needed, and the regressors will have no effect in future forecasts. The option `\code{x}` means that the regressors' value will forecasted based on the same model as `\code{x}`. The option `\code{auto.arima}` means that the regressors' value will forecasted based on the best model found by \code{auto.arima()}. Default is `\code{none}`.
 #' @param x.name name of the series. If omitted here, the series name found by \code{tsname()} will be taken over here. If \code{tsname()} is \code{NULL}, the variable name will be used instead. Default is \code{NULL}.
 #' @param pred.name name of the forecasted series here. Default is `\code{Forecasts}`.
 #' @param ... additional arguments affecting the forecasts produced.
@@ -57,7 +60,8 @@ tsforecast <- function(object, n.ahead = 1, alpha = 0.05, show.plot = TRUE,
 #' @usage NULL
 get_forecast <- function(object, n.ahead = 1, alpha = 0.05, show.plot = TRUE,
                        forecast.incl = c("all", "forecast", "predict"), nobs.incl = NULL,
-                       log = NULL, newxreg = NULL, x.name = NULL, pred.name = "Forecasts", ...)
+                       log = NULL, newxreg = NULL, newxreg.est = c("none", "x", "auto.arima"), 
+                       x.name = NULL, pred.name = "Forecasts", ...)
 {
     orgmatch <- match.call()
     arglist <- as.list(orgmatch)[-1]
@@ -65,25 +69,8 @@ get_forecast <- function(object, n.ahead = 1, alpha = 0.05, show.plot = TRUE,
     x.name <- if (is.null(x.name) & is.null(tsname(object$x))) {object$series} else if (is.null(x.name) & !is.null(tsname(object$x))) {tsname(object$x)} else {x.name}
     forecast.incl <- tolower(match.arg(forecast.incl))
     log <- if (is.null(log) & class(object)[1] == "tsarima") {object$log} else {log <- FALSE}
-    if (!is.null(object$xreg))
-    {
-        ncxreg <- ncol(object$xreg)
-        if (ncxreg > 0 & is.null(newxreg))
-        {
-            colxreg <- colnames(object$xreg)
-            newxreg <- NULL
-            for (j in 1:ncxreg)
-            {
-                regj <- tsattrcopy(x = object$xreg[, j], x.orig = object$x.used)
-                xreg.arima <- tsarima(regj, order = c(object$arma[1], object$arma[6], object$arma[2]), seasonal = list(order = c(object$arma[3], object$arma[7], object$arma[4]), period = object$arma[5]), include.const = object$include.const)
-                xreg.arima.pred <- predict.tsarima(xreg.arima, n.ahead = n.ahead)$pred
-                newxreg <- cbind(newxreg, xreg.arima.pred)
-            }
-            colnames(newxreg) <- colxreg
-        }
-    }
-    fc_arglist <- list(object = object, newxreg = newxreg, n.ahead = n.ahead, alpha = alpha, log = log)
-    fc <- if ("tsarima" %in% class(object)) {do.call(predict.tsarima, fc_arglist)} else if ("tsesm" %in% class(object)) {do.call(predict.tsesm, fc_arglist)}
+    fc_arglist <- list(object = object, newxreg = newxreg, newxreg.est = newxreg.est, n.ahead = n.ahead, alpha = alpha, log = log)
+    fc <- if ("tsarima" %in% class(object)) {do.call(predict.tsarima, fc_arglist)} else if ("tsesm" %in% class(object)) {do.call(predict.tsesm, fc_arglist)} else if ("tslm" %in% class(object)) {do.call(predict.tslm, fc_arglist)}
     if (!is.null(nobs.incl) && (nobs.incl == 0 && forecast.incl == "all")) {forecast.incl <- "forecast"}
     if (forecast.incl == "forecast")
     {
@@ -169,6 +156,16 @@ tsforecast.tsarima <- function(object, ...)
 #' @rdname tsforecast
 #' @exportS3Method 
 tsforecast.tsesm <- function(object, ...)
+{
+    args <- as.list(match.call())
+    args$object <- object
+    do.call(get_forecast, args[-1L])
+}
+
+##### Forecast Time Series Regression with Plot #####
+#' @rdname tsforecast
+#' @exportS3Method 
+tsforecast.tslm <- function(object, ...)
 {
     args <- as.list(match.call())
     args$object <- object
@@ -349,6 +346,7 @@ optimTimeBreaks <- function(len, frequency, numbreaks)
 #' @param order a specification of the non-seasonal part of the ARIMA model: the three integer components \eqn{(p, d, q)} are the AR order, the degree of differencing, and the MA order.
 #' @param seasonal a specification of the seasonal part of the ARIMA model \eqn{(P, D, Q)}, the seasonal AR order, the degree of seasonal differencing, and the seasonal MA order, plus the period (which defaults to \code{frequency(x)}). This should be a list with components \code{order} and \code{period}, but a specification of just a numeric vector of length 3 will be turned into a suitable list with the specification as the order. 
 #' @param xreg optional. A vector or matrix of external regressors, which must have the same number of rows as \code{x}.
+#' @param xreg.order optional. A vector, list, or numeric value of the external regressors' lags included in the model. If `\code{xreg}` has more than one column, the number of values provided in `\code{xreg.order}` will be assigned to the columns. the orders should be provided as a list with the entries in the same sequence as the columns in `\code{xreg}`. If the number of values does not match the number of columns, the values in `\code{xreg.order}` will be trimmed (too many) or repeated (too less). If omitted, no lagged version of `\code{xreg}` will be generated. Default is \code{NA}.
 #' @param include.const logical. Indicates if the ARMA model should include a mean/intercept term. The default is \code{TRUE} for non-differenced series. For ARIMA models with differencing, it may fail to estimate the standard errors.
 #' @param log optional. A logical value indicating whether the forecasted values are log-transformed and should be inverted back to the original series scale. If the object is an \code{tsarima} model and this parameter is omitted, the value will be taken over by the settings of the model given in object. Default is \code{NULL} here.
 #' @param train.prop a numerical value specifying the proportion of training data in the series. The value must be between 0 and 1. Default is \code{1}.
@@ -437,7 +435,7 @@ optimTimeBreaks <- function(len, frequency, numbreaks)
 #' @importFrom stats arima
 #' @export
 tsarima <- function(x, order = c(0L, 0L, 0L), seasonal = list(order = c(0L, 0L, 0L), period = NA), 
-                    xreg = NULL, include.const = TRUE, log = FALSE, train.prop = 1, arch.test = FALSE, 
+                    xreg = NULL, xreg.order = NA, include.const = TRUE, log = FALSE, train.prop = 1, arch.test = FALSE, 
                     transform.pars = TRUE, fixed = NULL, init = NULL, method = c("CSS-ML", "ML", "CSS"), SSinit = c("Gardner1980", "Rossignol2011"),
                     optim.method = "BFGS", optim.control = list(), kappa = 1e+06)
 {
@@ -453,19 +451,13 @@ tsarima <- function(x, order = c(0L, 0L, 0L), seasonal = list(order = c(0L, 0L, 
     series <- deparse1(substitute(x))
     if (!is.null(xreg)) 
     {
-        if (!is.numeric(xreg)) 
-        {
-            stop("xreg should be a numeric matrix or a numeric vector")
-        }
-        xreg <- as.matrix(xreg)
-        if (is.null(colnames(xreg))) 
-        {
-            colnames(xreg) <- if (ncol(xreg) == 1) {"xreg"} else {paste("xreg", 1:ncol(xreg), sep = "")}
-        }
-        xnam <- colnames(xreg)
+        extreg <- xreg_prep(xreg = xreg, xreg.order = xreg.order)
+        xreg_model <- extreg$xreg_model
+        xnam <- extreg$xnam
     }
     else
     {
+        xreg_model <- NULL
         xnam <- NULL
     }
     if (!is.list(seasonal)) 
@@ -484,20 +476,23 @@ tsarima <- function(x, order = c(0L, 0L, 0L), seasonal = list(order = c(0L, 0L, 
     if (include.const) 
     {
         intercept <- driftx(x, order = order[2], order.D = seasonal$order[2], period = if(is.null(seasonal$period)) {xfreq} else {seasonal$period})
-        xreg_model <- cbind(xreg, intercept)
+        xreg_model <- cbind(xreg_model, intercept)
         colnames(xreg_model) <- c(xnam, "intercept")
     }
-    else
-    {
-        xreg_model <- xreg    
-    }
-    if (log) {xreg_model <- log(xreg_model)}
     if (include.const == TRUE && (order[2] + seasonal$order[2] > 0))
     {
         SSinit <- "Rossignol2011"
         optim.method = "L-BFGS-B"
     }
-    xmodel <- if (log) {log(x)} else {x}
+    if (log) 
+    {
+        xmodel <- log(x)
+        xreg_model <- log(xreg_model)
+    } 
+    else 
+    {
+        xmodel <- x
+    }
     trainlen <- round(train.prop * length(xmodel), 0)
     xdate_train <- xdate$time[1:trainlen]
     xmodel_train <- tsattrcopy(x = xmodel[1:trainlen], x.orig = x)
@@ -517,7 +512,7 @@ tsarima <- function(x, order = c(0L, 0L, 0L), seasonal = list(order = c(0L, 0L, 
     x.name <- if (is.null(tsname(x))) {series} else {tsname(x)}
     out <- c(list(coef = coef, const = const, sigma2 = arima.fit$sigma2, var.coef = arima.fit$var, mask = arima.fit$mask, loglik = arima.fit$loglik,
                   aic = aic, aicc = aicc, bic = bic, error = error, arma = arima.fit$arma, train.prop = train.prop, 
-                  x = x, x.time = xdate$time, x.timegap = xdate$frequency, x.name = x.name, x.time.used = xdate_train, x.used = xmodel_train, fitted = fitted, residuals = arima.fit$residuals, xreg = xreg, xreg.used = xreg_modeltrain[, xnam]),
+                  x = x, x.time = xdate$time, x.timegap = xdate$frequency, x.name = x.name, x.time.used = xdate_train, x.used = xmodel_train, fitted = fitted, residuals = arima.fit$residuals, xreg = xreg, xreg.used = xreg_modeltrain[, xnam], xreg.order = xreg.order),
              if (log) {list(exp.residuals = exp(arima.fit$residuals), exp.fitted = exp(fitted))},
              list(log = log, include.const = include.const, call = match.call(), series = series, code = arima.fit$code, n.cond = arima.fit$n.cond, nobs = arima.fit$nobs, model = arima.fit$model))
     if (arch.test) {out$mcleod.li.test <- tsmltest(object = out, lag.max = min(10 * log10(length(xmodel_train)), 8))}
@@ -527,7 +522,9 @@ tsarima <- function(x, order = c(0L, 0L, 0L), seasonal = list(order = c(0L, 0L, 
         xdate_test <- xdate$time[(trainlen + 1):length(xmodel)]
         xmodel_test <- tsconvert(x = xmodel[(trainlen + 1):length(xmodel)], t = xdate_test, x.name = tsname(x))
         xreg_modeltest <- if (!is.null(xreg)) {xreg_model[(trainlen + 1):length(xmodel), , drop = FALSE]} else {NULL}
-        testval <- predict.tsarima(out, n.ahead = testlen, newxreg = xreg_modeltest[, xnam], se.fit = FALSE, log = FALSE)$pred
+        out.temp <- out
+        out.temp$xreg.order <- NA
+        testval <- predict.tsarima(out.temp, n.ahead = testlen, newxreg = xreg_modeltest[, xnam], se.fit = FALSE, log = FALSE)$pred
         testres <- as.numeric(xmodel_test) - as.numeric(testval)
         attributes(testval) <- attributes(xmodel_test)
         attributes(testres) <- attributes(xmodel_test)
@@ -536,6 +533,47 @@ tsarima <- function(x, order = c(0L, 0L, 0L), seasonal = list(order = c(0L, 0L, 
     }
     out <- structure(out, class = c("tsarima"))
     return(out)
+}
+
+##### Prepare Regressor for ARIMA #####
+xreg_prep <- function(xreg, xreg.order)
+{
+    if (!is.list(xreg.order)) {xreg.order <- list(xreg.order)}
+    numorder <- length(unlist(xreg.order))
+    if ((numorder > 1) & anyNA(xreg.order, recursive = TRUE)) {stop("One of the values in `xreg.order` is NA!")}
+    needlag <- if ((numorder == 1) & anyNA(xreg.order, recursive = TRUE)) {FALSE} else {TRUE}
+    if (is.matrix(xreg) & length(xreg.order) == 1 & (needlag == FALSE))
+    {
+        xnam <- colnames(xreg)
+        xreg_model <- xreg
+    }
+    else if (is.ts(xreg) & length(xreg.order) == 1 & (needlag == FALSE))
+    {
+        xnam <- tsname(xreg)
+        xreg_model <- as.matrix(xreg)
+    }
+    else
+    {
+        ncxreg <- if (is.ts(xreg) & !is.matrix(xreg)) {1} else if (!is.ts(xreg) & !is.matrix(xreg) & !is.data.frame(xreg)) {ncol(xreg <- as.matrix(xreg))} else {ncol(xreg)}
+        nrxreg <- if (!is.matrix(xreg) & !is.data.frame(xreg)) {length(xreg)} else {nrow(xreg)}
+        if (length(xreg.order) != ncxreg)
+        {
+            xreg.order <- rep(xreg.order, length.out = ncxreg)
+        }
+        nxregorder <- length(xreg.order)
+        xregnam <- colnames(xreg)
+        extreg <- matrix(NA, nrxreg, 0)
+        for (j in 1:nxregorder)
+        {
+            xlag <- if (nxregorder > 1) {xreg[, j]} else {xreg}
+            xlag <- if (is.null(tsname(xlag)) & is.null(xregnam[j])) {tsname(xlag, x.name = paste0("xreg", j))} else if (is.null(tsname(xlag)) & !is.null(xregnam[j])) {tsname(xlag, x.name = xregnam[j])} else {xlag}
+            xtemplag <- tslag(x = xlag, lag = xreg.order[[j]], return.matrix = TRUE)
+            extreg <- if (nxregorder > 1) {cbind(extreg, xtemplag)} else {xtemplag}
+        }
+        xreg_model <- if (!is.matrix(extreg)) {as.matrix(extreg)} else {extreg}
+        xnam <- colnames(xreg_model)
+    }
+    return(list(xreg_model = xreg_model, xnam = xnam))
 }
 
 ##### Print ARIMA Models #####
@@ -637,9 +675,9 @@ summary.tsarima <- function(object, digits = max(3L, getOption("digits") - 3L), 
     {
         cat("Test of ARCH effects:\n")
         arch.tab <- t(as.data.frame(object$mcleod.li.test))
-        rownames(arch.tab) <- c("chi^2 value", "Pr(> chi^2)")
+        rownames(arch.tab) <- c("Chi^2 value", "Pr(> Chi^2)")
         colnames(arch.tab) <- seq(1, ncol(arch.tab))
-        print(arch.tab, digits = digits, print.gap = 3)
+        print(round(arch.tab, digits = digits), digits = digits, print.gap = 3)
         cat("\n")
     }
     cat("Error measures:\n")
@@ -651,19 +689,64 @@ summary.tsarima <- function(object, digits = max(3L, getOption("digits") - 3L), 
 ##### Predict ARIMA Models #####
 #' @rdname predict
 #' @param newxreg new values of the regressors. Only necessary if ARIMA model is built with independent variables.
+#' @param newxreg.est character strings to indicate how the new values of the regressors in an ARIMAX model should be estimated in case they are not yet available. If \code{newxreg} is not \code{NULL}, this argument will be ignored. Available options are `\code{none}`, `\code{x}`, and `\code{auto.arima}`. The option `\code{none}` means that no estimation is needed, and the regressors will have no effect in future forecasts. The option `\code{x}` means that the regressors' value will forecasted based on the same model as `\code{x}`. The option `\code{auto.arima}` means that the regressors' value will forecasted based on the best model found by \code{auto.arima()}. Default is `\code{none}`.
 #' @param se.fit logical. If \code{TRUE}, standard error of each prediction will be calculated and included. Default is \code{TRUE}.
 #' @param log optional. A logical value indicating whether the forecasted values are log-transformed and should be inverted back to the original series scale. If the object is an \code{tsarima} model and this parameter is omitted, the value will be taken over by the settings of the model given in object. Default is \code{NULL} here.
 #' @exportS3Method 
-predict.tsarima <- function (object, n.ahead = 1L, newxreg = NULL, se.fit = TRUE, alpha = 0.05, log = NULL, ...)
+#' @importFrom forecast auto.arima
+#' @importFrom stats predict
+predict.tsarima <- function (object, n.ahead = 1L, newxreg = NULL, newxreg.est = c("none", "x", "auto.arima"), se.fit = TRUE, alpha = 0.05, log = NULL, ...)
 {
-    xr <- object$call$xreg
-    xreg <- if (!is.null(xr)) {eval.parent(xr)} else {NULL}
-    if (!is.null(newxreg)) 
+    newxreg.est <- match.arg(newxreg.est)
+    xreg.order <- if (!is.list(object$xreg.order)) {list(object$xreg.order)} else {object$xreg.order}
+    numorder <- length(unlist(xreg.order))
+    needlag <- if ((numorder == 1) & anyNA(xreg.order, recursive = TRUE)) {FALSE} else {TRUE}
+    ldate <- fperiod(object$x.used, n.ahead = n.ahead)
+    if (!is.null(object$xreg)) # if xreg involves in the model
     {
-        ncxreg <- ncol(xreg)
-        if (ncol(newxreg) != ncxreg) {stop("'xreg' and 'newxreg' have different numbers of columns")}
-        if (!is.numeric(newxreg)) {stop("newxreg should be numeric.")}
-        newxreg <- as.matrix(newxreg)
+        ncxreg <- if (is.matrix(object$xreg) | is.data.frame(object$xreg)) {ncol(object$xreg)} else {1}
+        ncxreg.used <- if (is.matrix(object$xreg.used)) {ncol(object$xreg.used)} else {1}
+        if (!is.null(newxreg) & (needlag == FALSE))  # if newxreg provides and no xreg.order in the model
+        {
+            ncnewxreg <- if (is.matrix(newxreg)) {ncol(newxreg)} else {1}
+            if (ncnewxreg != ncxreg.used) {stop("'xreg' and 'newxreg' have different numbers of columns")}
+            newxreg <- as.matrix(newxreg)
+        }
+        else 
+        {
+            if (is.null(newxreg))  # if newxreg not provides and no xreg.order in the model
+            {
+                for (j in 1:ncxreg)
+                {
+                    origxregj <- if (is.matrix(object$xreg) | is.data.frame(object$xreg)) {object$xreg[, j]} else {object$xreg}
+                    if (!is.ts(origxregj)) {origxregj <- tsconvert(x = origxregj, t = object$x.time.used)} 
+                    if (newxreg.est == "none")
+                    {
+                        newcdata <- matrix(0, n.ahead, 1)
+                    }
+                    else if (newxreg.est == "x")
+                    {
+                        newcdata <- predict.tsarima(tsarima(origxregj, order = c(object$arma[1], object$arma[6], object$arma[2]), seasonal = list(order = c(object$arma[3], object$arma[7], object$arma[4]), period = object$arma[5]), include.const = object$include.const, log = object$log), n.ahead = n.ahead)$pred
+                    }
+                    else if (newxreg.est == "auto.arima")
+                    {
+                        newcdata <- stats::predict(forecast::auto.arima(origxregj, max.p = 5, max.q = 5, max.P = 2, max.Q = 2, max.d = 2, max.D = 2, start.p = 0, start.q = 0, start.P = 0, start.Q = 0), n.ahead = n.ahead)$pred
+                    }
+                    newcdata <- tsconvert(x = c(origxregj, newcdata), t = c(object$x.time.used, ldate))
+                    newxreg <- cbind(newxreg, newcdata)
+                }
+            }
+            if (needlag == FALSE)
+            {
+                newxreg <- as.matrix(newxreg)
+            }
+            else
+            {
+                newxreg <- xreg_prep(xreg = newxreg, xreg.order = object$xreg.order)$xreg_model
+            }
+            ncxreg <- ncol(newxreg)
+            newxreg <- newxreg[c(object$x.time.used, ldate) >= ldate[1], ]
+        }
     }
     else
     {
@@ -680,12 +763,12 @@ predict.tsarima <- function (object, n.ahead = 1L, newxreg = NULL, se.fit = TRUE
         if (object$include.const) 
         {
             newconst <- tail(driftx(rep(1, n + n.ahead), order = arma[6L], order.D = arma[7L], period = arma[5L]), n.ahead)
+            if (userlog == TRUE | (is.null(log) & object$log == TRUE))
+            {
+                newconst <- log(newconst)
+            }
             newxreg <- cbind(newxreg, mean = newconst)
             ncxreg <- ncxreg + 1L
-        }
-        if (userlog == TRUE | (is.null(log) & object$log == TRUE))
-        {
-            newxreg <- log(newxreg)
         }
         xm <- if (narma == 0) {drop(as.matrix(newxreg) %*% coefs)} else {drop(as.matrix(newxreg) %*% coefs[-(1L:narma)])}
     }
@@ -693,18 +776,23 @@ predict.tsarima <- function (object, n.ahead = 1L, newxreg = NULL, se.fit = TRUE
     {
         xm <- 0
     }
-    if (arma[2L] > 0L) {
+    if (arma[2L] > 0L) 
+    {
         ma <- coefs[arma[1L] + 1L:arma[2L]]
         if (any(Mod(polyroot(c(1, ma))) < 1))
+        {
             warning("MA part of model is not invertible")
+        }
     }
-    if (arma[4L] > 0L) {
+    if (arma[4L] > 0L) 
+    {
         ma <- coefs[sum(arma[1L:3L]) + 1L:arma[4L]]
         if (any(Mod(polyroot(c(1, ma))) < 1))
+        {
             warning("seasonal MA part of model is not invertible")
+        }
     }
     z <- KalmanForecast(n.ahead, object$model)
-    ldate <- fperiod(object$x.used, n.ahead = n.ahead)
     pred <- tsconvert(x = z[[1L]] + xm, t = ldate)
     if (se.fit)
     {
@@ -1070,6 +1158,7 @@ print.tspredict <- function(x, ...)
 #' @param alpha significance level. (1 - \code{alpha}) indicates is the confidence level of the prediction interval. Default is \code{0.05}.
 #' @param x.name name of the series. If omitted here, the series name found by \code{tsname()} will be taken over here. If \code{tsname()} is \code{NULL}, the variable name will be used instead. Default is \code{NULL}. 
 #' @param title character string indicating the plot title.
+#' @param prewhiten a list of seasonal ARIMA orders to prewhiten \code{x} and \code{y} for cross-correlation or cross-covariance. Only applicable if \code{type = "cross-correlation"} or \code{type = "cross-covariance"}.
 #' @author Ka Yui Karl Wu
 #' @details For \code{type = "correlation"} and \code{"covariance"}, the estimates are based on the sample covariance of \eqn{x_t} and \eqn{x_{t-k}} (lag 0 autocorrelation is fixed at 1 by convention.). For \code{"cross-correlation"} and \code{"cross-covariance"}, the estimates are based on the sample covariance of \eqn{x_t} and \eqn{y_{t-k}}.
 #' @details By default, no missing values are allowed. However, by default, \code{na.action = na.omit}, the covariances are computed only from complete cases. This means that the estimate computed may well not be a valid autocorrelation sequence, and may contain missing values. Missing values are not allowed when computing the PACF of a multivariate time series.
@@ -1098,10 +1187,13 @@ print.tspredict <- function(x, ...)
 #'            "cross-correlation", "cross-covariance"), 
 #'   show.plot = TRUE, na.action = na.omit, 
 #'   demean = TRUE, alpha = 0.05, 
-#'   x.name = NULL, title = NULL)
+#'   x.name = NULL, title = NULL,
+#'   prewhiten = list(order = c(0L, 0L, 0L), 
+#'                    seasonal = c(0L, 0L, 0L), 
+#'                    period = NA))
 #' @importFrom stats acf
 #' @export
-tsacf <- function(x, y = NULL, lag.max = 8, type = c("correlation", "covariance", "partial", "cross-correlation", "cross-covariance"), show.plot = TRUE, na.action = na.omit, demean = TRUE, alpha = 0.05, x.name = NULL, title = NULL)
+tsacf <- function(x, y = NULL, lag.max = 8, type = c("correlation", "covariance", "partial", "cross-correlation", "cross-covariance"), show.plot = TRUE, na.action = na.omit, demean = TRUE, alpha = 0.05, x.name = NULL, title = NULL, prewhiten = list(order = c(0L, 0L, 0L), seasonal = c(0L, 0L, 0L), period = NA))
 {
     type <- match.arg(type)
     x.name <- if (is.null(x.name) & is.null(tsname(x))) {deparse1(substitute(x))} else if (is.null(x.name) & !is.null(tsname(x))) {tsname(x)} else {x.name}
@@ -1112,6 +1204,19 @@ tsacf <- function(x, y = NULL, lag.max = 8, type = c("correlation", "covariance"
     {
         fun <- "ccf"
         ctype <- if (type == "cross-correlation") {"correlation"} else if (type == "cross-covariance") {"covariance"}
+        if (!is.list(prewhiten))
+        {
+            prewhiten <- list(order = prewhiten)
+        }
+        if (sum(prewhiten$order) + sum(prewhiten$seasonal) > 0)
+        {
+            if (is.null(prewhiten$seasonal)) {prewhiten$seasonal <- c(0, 0, 0)}
+            if (is.null(prewhiten$seasonal)) {prewhiten$period <- NA}
+            pw.x <- tsarima(x, order = prewhiten$order, seasonal = list(order = prewhiten$seasonal, period = prewhiten$period))
+            pw.y <- tsarima(y, order = prewhiten$order, seasonal = list(order = prewhiten$seasonal, period = prewhiten$period), fixed = pw.x$coef, method = "CSS")
+            x <- pw.x$residuals
+            y <- pw.y$residuals
+        }
         acfdat <- list(x = x, y = y)
     }
     else
@@ -1350,15 +1455,7 @@ tsdecomp <- function(x, type = c("additive", "multiplicative"), trend.method = c
     dtc <- if (type == "additive") {x - tc} else {x / tc}
     if (sc.exist)
     {
-        t1 <- tstime(x)$time[1]
-        wdlist <- list(Sunday = 0, Monday = 1, Tuesday = 2, Wednesday = 3, Thursday = 4, Friday = 5, Saturday = 6)
-        ctype <- attr(x, "seasonal.cycle")
-        callfunc <- if (ctype == "min") {"minute"} else if (ctype == "sec") {"second"} else if (ctype == "weekday") {"weekdays"} else {ctype}
-        season.start <- do.call(callfunc, list(t1))
-        if (ctype == "weekday") {season.start <- wdlist[season.start]}
-        season.init <- list(month = 1, week = 1, quarter = 1, day = 1, weekdays = 0, hour = 0, min = 0, sec = 0)
-        season.total <- list(month = 12, week = 52, quarter = 4, day = 365, weekdays = 6, hour = 23, min = 59, sec = 59)
-        season.seq <- c(season.start:as.numeric(season.total[ctype]), if (season.start != as.numeric(season.init[ctype])) {as.numeric(season.init[ctype]):(season.start - 1)} else {c()})
+        season.seq <- getSeasonSeq(x)
         season.nam <- rep(season.seq, length.out = length(x))
         season.d <- data.frame(list(Season = season.nam, Effect = sic))
         sc.effect <- aggregate(Effect ~ Season, data = season.d, FUN = mean)
@@ -1918,7 +2015,7 @@ tsmltest <- function(object, lag.max = NULL)
     {
         cor <- tsacf(x ^ 2, lag.max = j, show.plot = FALSE)
         n <- sum(!is.na(x))
-        obs <- cor$acf[1:j]
+        obs <- cor$acf[2:(j + 1)]
         teststat[j] <- n * (n + 2) * sum(1/seq.int(n - 1, n - j) * obs ^ 2)
         pval[j] <- 1 - pchisq(teststat[j], j)
     }
@@ -2038,20 +2135,39 @@ tsdiff <- function(x, lag = 1L, order = 1L, lag.D = 0L, order.D = 0L)
 #' @name tslag
 #' @rdname tslag
 #' @param x a univariate time series object.
-#' @param lag number of lags (in units of observations). Default is \code{1}.
+#' @param lag number of lags (in units of observations). Default is \code{1}. If multiple values are given as a vector, multiple lagged version of the series will be returned as a matrix.
+#' @param return.matrix optional. A boolean value indicating whether the lagged version of `\code{x}` should be returned as a matrix. Only meaningful if \code{lag} has only one value.
 #' @author Ka Yui Karl Wu
 #' @return The same time series object as \code{x} after being back- or foreshifted for the number of periods specified in \code{lag}.
 #' @details Note the sign of \code{lag}: a series lagged by a positive \code{lag} starts earlier.
 #' @seealso \link{lag}
 #' @example inst/examples/tslag/tslag.R
 #' @export
-tslag <- function(x, lag = 1L)
+tslag <- function(x, lag = 1L, return.matrix = FALSE)
 {
+    x.shift <- function(k, y)
+    {
+        cutlen <- length(y) - abs(k)
+        y.s <- if (k > 0) {c(rep(NA, abs(k)), head(y, cutlen))} else if (k < 0) {c(tail(y, cutlen), rep(NA, abs(k)))} else {y}
+        attributes(y.s) <- attributes(y)
+        return(y.s)
+    }
     if (!is.ts(x)) {stop("x must be a time series.")}
-    xlen <- length(x)
-    cutlen <- xlen - abs(lag)
-    xlag <- if (lag > 0) {c(rep(NA, abs(lag)), head(x, cutlen))} else if (lag < 0) {xlag <- c(tail(x, cutlen), rep(NA, abs(lag)))} else {x}
-    attributes(xlag) <- attributes(x)
+    xname <- tsname(x)
+    if (length(lag) > 1) 
+    {
+        xlag <- as.matrix(as.data.frame(lapply(X = lag, FUN = x.shift, y = x)))
+    } 
+    else 
+    {
+        xlag <- x.shift(k = lag, y = x)
+        if (return.matrix) {xlag <- as.matrix(xlag)}
+    }
+    if (is.matrix(xlag)) 
+    {
+        rownames(xlag) <- sapply(tstime(x)$time, FUN = as.character)
+        colnames(xlag) <- paste0(if (!is.null(xname)) {xname} else {"x"}, ".lag", lag)
+    }
     return(xlag)
 }
 
@@ -2072,7 +2188,16 @@ tslag <- function(x, lag = 1L)
 #' @export
 tsfreq <- function(x)
 {
-    return(attr(x, "seasonal.cycle"))
+    if (is.null(attr(x, "seasonal.cycle"))) 
+    {
+        timefreq <- c("year" = 1, "quarter" = 4, "month" = 12, "week" = 52.1429, "weekdays" = 7, "day" = 365.2422, "hour" = 24, "min" = 1 / 60, "sec" = 1 / 3600)
+        xfreq <- names(timefreq[timefreq == frequency(x)])
+    }
+    else
+    {
+        xfreq <- attr(x, "seasonal.cycle")
+    }
+    return(xfreq)
 }
 
 ##### Extract Time Series Date #####
@@ -2103,7 +2228,7 @@ tstime <- function(x)
             }
             else
             {
-                xtimeadj <- xtime + 0.0015
+                xtimeadj <- xtime + 0.0015 + if (xfreq == "month") {0.002} else {0}
                 xyear <- floor(xtimeadj)
                 multifreq <- if (xfreq == "day") {ifelse(xyear %% 400 == 0L | xyear %% 4L == 0L, 366, 365)} else {rep(frequency(x), n)}
                 xrest <- floor((xtimeadj - xyear) * multifreq) + 1L
@@ -2326,6 +2451,376 @@ plot.tsmovav <- function(x, title = NULL, ...)
                title = title, pred.col = "red", x.name = x$x.name, pred.name = x$pred.name, ...)
 }
 
+##### Time Series Regression Models #####
+#' Generate Time Series Regression Model
+#' @description Fit Time Series Regression Models.
+#' @name tslm
+#' @rdname tslm
+#' @param x a univariate time series or a `\code{tslm}` object.
+#' @param trend.order an integer specifying the polynomial order of the trend line estimation. If \code{trend.order = 0}, no trend component will be included in the model. Default is 1.
+#' @param seasonal logical. If \code{TRUE}, seasonal component will be included in the model. Default is \code{FALSE}.
+#' @param period a numerical value specifying the seasonal cycle length of the series. If omitted, \code{frequency(x)} will be used here. Only effective if \code{seasonal = TRUE}. Default is \code{NA}.
+#' @param type string characters specifying the series type. Available options are `\code{additive}` and `\code{multiplicative}`. If `\code{type = multiplicative}`, interaction terms between trend and seasonal components will be added to the model. Default is `\code{additive}`.
+#' @param train.prop a numerical value specifying the proportion of training data in the series. The value must be between 0 and 1. Default is \code{1}.
+#' @author Ka Yui Karl Wu
+#' @returns An object of class `\code{tslm}` is a list containing at least the following components:
+#' @return \item{coefficients}{a named vector of coefficients}
+#' @return \item{residuals}{the residuals, that is response minus fitted values}
+#' @return \item{rank}{the numeric rank of the fitted linear model}
+#' @return \item{fitted.values}{the fitted mean values}
+#' @return \item{df.residual}{the residual degrees of freedom}
+#' @return \item{call}{the matched call}
+#' @return \item{terms}{the terms object used}
+#' @return \item{xlevels}{(only where relevant) a record of the levels of the factors used in fitting}
+#' @return \item{offset}{the offset used (missing if none were used)}
+#' @return \item{model}{if requested (the default), the model frame used}
+#' @return \item{train.prop}{proportion of training data.}
+#' @return \item{x}{data of the original series.}
+#' @return \item{x.time}{list of time in which the series values were observed.} 
+#' @return \item{x.timegap}{time gap between the series and forecasted values.}
+#' @return \item{x.name}{name of the time series for which forecasts was requested.}
+#' @return \item{x.time.used}{list of time in which the series values were used for model fitting. It will be the same as \code{x.time} if \code{train.prop = 1}.}
+#' @return \item{x.used}{data of the original series which were used for model fitting. It will be the same as \code{x} if \code{train.prop = 1}.}
+#' @return \item{series}{series name \code{x} in match call.}
+#' @return \item{error}{a list of prediction error estimators, including \code{$ME} for mean error, \code{$RMSE} for root mean squared error, \code{$MAE} for mean absolute error, \code{$MPE} for mean percentage error, \code{$MAPE} for mean absolute percentage error, \code{$MASE} for mean absolute scaled error, \code{$MASE.S} for seasonal mean absolute scaled error, and \code{$ACF1} for lag 1 autocorrelation.}
+#' @return \item{model.test}{a list of information regarding the prediction of the testing data including `\code{x.test}` (part of `\code{x}` used for testing), `\code{fitted.test}` (predicted values of the testing data), `\code{residuals.test}` (prediction error of the testing data), and `\code{error.test}` (prediction error measurements based on the testing data). Only available if \code{train.prop} is smaller than 1.}
+#' @references Hyndman, R. J., Athanasopoulos, G. (2021). Forecasting: Principles and practice (3rd ed.). OTexts. \cr \url{https://otexts.com/fpp3/} 
+#' @example inst/examples/tslm/tslm.R
+#' @export
+tslm <- function(x, trend.order = 1, seasonal = FALSE, period = NA, type = c("additive", "multiplicative"), train.prop = 1)
+{
+    type <- match.arg(type)
+    if (!is.ts(x)) {stop("`x` must be a time series!")}
+    xfreq <- frequency(x)
+    xdate <- tstime(x)
+    n <- length(x)
+    if (n == 0) {stop("Time Series must contain data for fitting regression models!")}
+    t <- 1:n
+    lmdata <- as.data.frame(list(x = x))
+    if (trend.order > 0)
+    {
+        lmdata <- cbind(lmdata, list(t = t))
+    }
+    if (seasonal == TRUE)
+    {
+        nseason <- if (is.na(period)) {xfreq} else {period}
+        season.seq <- if (!is.na(period)) {season.seq <- 1L:nseason} else {getSeasonSeq(x)}
+        seasons <- as.factor(rep(season.seq, length.out = n))
+        lmdata <- cbind(lmdata, list(s = seasons))
+        f.s <- if (type == "multiplicative") {" * s"} else " + s"
+    }
+    else
+    {
+        f.s <- ""
+    }
+    trainlen <- round(train.prop * length(x), 0)
+    xdate_train <- xdate$time[1:trainlen]
+    xmodel_train <- tsattrcopy(x = x[1:trainlen], x.orig = x)
+    lmdata_train <- lmdata[1:trainlen, , drop = FALSE]
+    pwr <- if (trend.order > 0) {paste0("(", paste0("I(t ^ ", 1:trend.order, ")", collapse = " + "), ")")} else {"1"}
+    f <- as.formula(paste0("x ~ ", pwr, f.s))
+    series <- deparse1(substitute(x))
+    x.name <- if (is.null(tsname(x))) {series} else {tsname(x)}
+    addlist <- c(list(original.call = match.call(), x = x, x.time = xdate$time, x.timegap = xdate$frequency, x.name = x.name, x.used = xmodel_train, x.time.used = xdate_train, series = series, trend.order = trend.order, seasonal = seasonal), if (seasonal) {list(seasons = levels(seasons), period = period)}, list(type = type))
+    reg.m <- lm(formula = f, data = lmdata_train)
+    names(reg.m)[names(reg.m) == "fitted.values"] <- "fitted"
+    reg.m$fitted <- tsattrcopy(reg.m$fitted, xmodel_train)
+    reg.m$residuals <- tsattrcopy(reg.m$residuals, xmodel_train)
+    error <- tsmodeleval(list(x = xmodel_train, fitted = reg.m$fitted))
+    out <- c(reg.m, addlist, list(error = error))
+    if (train.prop < 1)
+    {
+        testlen <- length(x) - trainlen
+        xdate_test <- xdate$time[(trainlen + 1):length(x)]
+        xmodel_test <- tsconvert(x = x[(trainlen + 1):length(x)], t = xdate_test, x.name = tsname(x))
+        lmdata_test <- lmdata[(trainlen + 1):length(x), , drop = FALSE]
+        testval <- predict.tslm(out, n.ahead = testlen, se.fit = FALSE)$pred
+        testres <- as.numeric(xmodel_test) - as.numeric(testval)
+        attributes(testval) <- attributes(xmodel_test)
+        attributes(testres) <- attributes(xmodel_test)
+        error_test <- tsmodeleval(list(x = xmodel_test, fitted = testval))
+        out <- c(out, list(model.test = list(x.test = xmodel_test, fitted.test = testval, residuals.test = testres, error.test = error_test)))
+    }
+    return(structure(out, class = "tslm"))
+}
+
+##### Print Time Series Regression Models #####
+#' @rdname tslm
+#' @param digits the number of significant digits.
+#' @param ... other printing or plotting parameters.
+#' @exportS3Method
+print.tslm <- function(x, digits = max(3L, getOption("digits") - 3L), ...)
+{
+    cat("\nCall:\n", paste(deparse(x$original.call), sep = "\n", collapse = "\n"), "\n", sep = "")
+    p <- x$rank
+    Qr <- x$qr
+    nqr <- ncol(Qr$qr)
+    aliased <- is.na(x$coefficients)
+    if (length(aliased) == 0L) 
+    {
+        cat("\nNo Coefficients\n")
+    }
+    else 
+    {
+        if (nsingular <- nqr - p) 
+        {
+            cat("\nCoefficients: (", nsingular, " not defined because of singularities)\n", sep = "")
+        }
+        else 
+        {
+            cat("\nCoefficients:\n")
+        }
+        nam <- names(aliased)
+        coefs <- x$coefficients[Qr$pivot[1L:p]]
+        torder <- x$trend.order
+        if (torder == 1L)
+        {
+            nam[nam == "I(t^1)"] <- "Trend"
+        }
+        else (torder > 1L)
+        {
+            for (j in 1L:torder)
+            {
+                subpattern <- paste0("I(t^", j, ")")
+                replstr <- paste0("Trend order ", j)
+                nam <- gsub(subpattern, replstr, nam, fixed = TRUE)
+            }
+        }
+        if (!is.null(x$seasons)) {nam <- gsub("s", "Season ", nam)}
+        names(coefs) <- nam
+        if (any(aliased))
+        {
+            coefs <- coefs[!aliased, ]
+        }
+        print(coefs, print.gap = 3)
+    }
+}
+
+##### Summarise Time Series Regression Models #####
+#' @rdname tslm
+#' @param object a \code{tslm} object for summary
+#' @param anova logical. If \code{TRUE}, an anova table with significance tests for trend, seasonality and their interaction will be included in the summary.
+#' @param digits the number of significant digits to use when printing
+#' @param se logical. If \code{TRUE}, standard error will be included in displaying the result. Default is \code{TRUE}.
+#' @param signif.stars logical. If \code{TRUE}, `significance stars` are printed for each coefficient
+#' @param ... other printing or summary parameters.
+#' @importFrom stats pf
+#' @importFrom stats as.formula
+#' @importFrom stats naprint
+#' @exportS3Method 
+summary.tslm <- function(object, anova = TRUE, digits = max(3L, getOption("digits") - 3L), se = TRUE, signif.stars = TRUE, ...)
+{
+    anova_r <- function(rm, ssr, df)
+    {
+        rss_rt <- sum(rm$residuals ^ 2L)
+        rss_diff <- rss_rt - ssr
+        df_diff <- rm$df.residual - df
+        fstat_r <- (rss_diff / df_diff) / (ssr / df)
+        fprob <- pf(fstat_r, df_diff, df, lower.tail = FALSE)
+        return(list(rss = rss_diff, df = df_diff, fstat = fstat_r, pval = fprob))
+    }
+    cat("\nCall:\n", paste(deparse(object$original.call), sep = "\n", collapse = "\n"), "\n\n", sep = "")
+    resid <- object$residuals
+    p <- object$rank
+    Qr <- object$qr
+    nqr <- ncol(Qr$qr)
+    n <- nrow(Qr$qr)
+    rdf <- object$df.residual
+    cat(if (!is.null(object$weights) && diff(range(object$weights))) {"Weighted "}, "Residuals:\n", sep = "")
+    if (rdf > 5L) 
+    {
+        nam <- c("Min", "1Q", "Median", "3Q", "Max")
+        rq <- if (length(dim(resid)) == 2L) {structure(apply(t(resid), 1L, quantile), dimnames = list(nam, dimnames(resid)[[2L]]))} else {zz <- zapsmall(quantile(resid), digits + 1L); structure(zz, names = nam)}
+        print(rq, digits = digits, ...)
+    }
+    else if (rdf > 0L) 
+    {
+        print(resid, digits = digits, ...)
+    }
+    else 
+    {
+        cat("ALL", p, "residuals are 0: no residual degrees of freedom!")
+        cat("\n")
+    }
+    aliased <- is.na(object$coefficients)
+    if (length(aliased) == 0L) 
+    {
+        cat("\nNo Coefficients\n")
+    }
+    else 
+    {
+        if (nsingular <- nqr - p) 
+        {
+            cat("\nCoefficients: (", nsingular, " not defined because of singularities)\n", sep = "")
+        }
+        else 
+        {
+            cat("\nCoefficients:\n")
+        }
+        r <- object$residuals
+        f <- object$fitted
+        if (!is.null(object$offset)) 
+        {
+            f <- f - object$offset
+        }
+        w <- object$weights
+        if (is.null(w)) 
+        {
+            mss <- if (attr(object$terms, "intercept")) {sum((f - mean(f)) ^ 2)} else {sum(f ^ 2)}
+            rss <- sum(r ^ 2)
+        }
+        else 
+        {
+            mss <- if (attr(object$terms, "intercept")) {m <- sum(w * f / sum(w)); sum(w * (f - m) ^ 2)} else {sum(w * f ^ 2)}
+            rss <- sum(w * r ^ 2)
+            r <- sqrt(w) * r
+        }
+        resvar <- rss / rdf
+        sigma <- sqrt(resvar)
+        if (is.finite(resvar) && resvar < (mean(f)^2 + var(c(f))) * 1e-30)  {warning("essentially perfect fit: summary may be unreliable")}
+        p1 <- 1L:p
+        R <- chol2inv(Qr$qr[p1, p1, drop = FALSE])
+        est <- object$coefficients[Qr$pivot[p1]]
+        if (se)
+        {
+            serr <- sqrt(diag(R) * resvar)
+            tval <- est / serr
+        }
+        coefs <- as.data.frame(c(list(Estimate = est), if (se) {list(se = serr, tval = tval, pval = 2 * pt(abs(tval), rdf, lower.tail = FALSE))}))
+        colnames(coefs) <- c("Estimate", if (se) {c("Std. Error", "t value", "Pr(>|t|)")})
+        nam <- names(aliased)
+        torder <- object$trend.order
+        if (torder == 1L)
+        {
+            nam[nam == "I(t^1)"] <- "Trend"
+        }
+        else (torder > 1L)
+        {
+            for (j in 1L:torder)
+            {
+                subpattern <- paste0("I(t^", j, ")")
+                replstr <- paste0("Trend order ", j)
+                nam <- gsub(subpattern, replstr, nam, fixed = TRUE)
+            }
+        }
+        if (object$seasonal) {nam <- gsub("s", "Season ", nam)}
+        if (any(aliased))
+        {
+            cn <- nam
+            coefs <- matrix(NA, length(aliased), 4, dimnames = list(cn, colnames(coefs)))
+            coefs[!aliased, ] <- object$coefficients
+        }
+        else
+        {
+            rownames(coefs) <- nam
+        }
+        printCoefmat(coefs, digits = digits, signif.stars = signif.stars, na.print = "NA", print.gap = 3, ...)
+        cat("\n")
+    }
+    if (anova & (object$trend.order > 0 | object$seasonal))
+    {
+        cat("Analysis of Variance:\n")
+        lmdata <- as.data.frame(c(list(x = object$model$x), if (object$trend.order > 0L) {list(t = 1L:length(object$model$x))}, if (object$seasonal) {list(s = object$model$s)}))
+        predvar <- attr(object$terms, "term.labels")
+        fterms <- as.character(object$terms)
+        f <- paste(fterms[2L], fterms[1L], fterms[3L])
+        rnam <- character(0L)
+        anova.tab <- as.data.frame(list(rss = numeric(0), df = numeric(0), fstat = numeric(0), pval = numeric(0)))
+        if (object$trend.order > 0L)
+        {
+            tterms <- predvar[1L:object$trend.order]
+            mterms <- predvar[grepl(":", predvar, fixed = TRUE)]
+            rf <- as.formula(paste(f, "-", paste(tterms, collapse = " - "), if (object$type == "multiplicative") {paste(c("", mterms), collapse = " - ")}))
+            rtm <- lm(formula = rf, data = lmdata)
+            rnam <- c(rnam, "Trend")
+            anova.tab <- rbind(anova.tab, anova_r(rm = rtm, ssr = rss, df = rdf))
+        }
+        if (object$seasonal)
+        {
+            mterms <- predvar[grepl(":", predvar, fixed = TRUE)]
+            rf <- as.formula(paste(f, "- s", if (object$type == "multiplicative") {paste(c("", mterms), collapse = " - ")}))
+            rts <- lm(formula = rf, data = lmdata)
+            rnam <- c(rnam, "Seasonality")
+            anova.tab <- rbind(anova.tab, anova_r(rm = rts, ssr = rss, df = rdf))
+        }
+        if (object$type == "multiplicative")
+        {
+            mterms <- predvar[grepl(":", predvar, fixed = TRUE)]
+            rf <- as.formula(paste(f, "-", paste(mterms, collapse = " - ")))
+            rtts <- lm(formula = rf, data = lmdata)
+            rnam <- c(rnam, "Trend * Seasonality")
+            anova.tab <- rbind(anova.tab, anova_r(rm = rtts, ssr = rss, df = rdf))
+        }
+        rownames(anova.tab) <- rnam
+        anova.stars <- anova.tab["pval"]
+        anova.stars[anova.tab["pval"] < 0.001] <- "***"
+        anova.stars[anova.tab["pval"] >= 0.001 & anova.tab["pval"] < 0.01] <- "**" 
+        anova.stars[anova.tab["pval"] >= 0.01 & anova.tab["pval"] < 0.05] <- "*" 
+        anova.stars[anova.tab["pval"] >= 0.05 & anova.tab["pval"] < 0.1] <- "." 
+        anova.stars[anova.tab["pval"] >= 0.1] <- ""
+        anova.tab <- cbind(anova.tab, anova.stars)
+        colnames(anova.tab) <- c("Residual SS", "d.f.", "F value", "Pr(>f)", "")
+        print(anova.tab, digits = digits, print.gap = 3)
+    }
+    cat("\nError measures:\n")
+    print(tsmodeleval(object), digits = digits, print.gap = 2)
+    cat("\nResidual standard error:", format(signif(sigma, digits)), "on", rdf, "degrees of freedom")
+    cat("\n")
+    if (nzchar(mess <- naprint(object$na.action))) {cat("  (", mess, ")\n", sep = "")}
+    if (p != attr(object$terms, "intercept")) 
+    {
+        df.int <- if (attr(object$terms, "intercept")) {1L} else {0L}
+        r.squared <- mss/(mss + rss)
+        adj.r.squared <- 1 - (1 - r.squared) * ((n - df.int) / rdf)
+        fstatistic <- c(value = (mss/(p - df.int))/resvar, numdf = p - df.int, dendf = rdf)
+        if (!is.null(fstatistic)) 
+        {
+            cat("Multiple R-squared: ", formatC(r.squared, digits = digits))
+            cat(",\tAdjusted R-squared: ", formatC(adj.r.squared, digits = digits), "\nF-statistic:", formatC(fstatistic[1L], digits = digits), "on", fstatistic[2L], "and", fstatistic[3L], "DF,  p-value:", format.pval(pf(fstatistic[1L], fstatistic[2L], fstatistic[3L], lower.tail = FALSE), digits = digits))
+            cat("\n")
+        }
+    }
+    cat("\n")
+}
+
+##### Predict Time Series Regression Models #####
+#' Predict Time Series Values
+#' @rdname predict
+#' @importFrom stats predict.lm
+#' @exportS3Method 
+predict.tslm <- function(object, n.ahead = 1L, se.fit = TRUE, alpha = 0.05, ...)
+{
+    x <- object$x.used
+    xdate <- tstime(x)
+    ldate <- fperiod(x, n.ahead = n.ahead)
+    if (object$seasonal)
+    {
+        if (is.na(object$period))
+        {
+            sseq <- getSeasonSeq(ldate)
+        }
+        else
+        {
+            lastseason <- as.numeric(tail(object$model$s, 1))
+            seqstart <- if (lastseason == object$period) {1} else {lastseason + 1}
+            sseq <- c(seqstart:object$period, if (seqstart != 1) {1:lastseason})
+        }
+        svar <- as.factor(rep(sseq, length.out = n.ahead))
+    }
+    newxreg <- as.data.frame(c(x = rep(1, n.ahead), if (object$trend.order > 0) {list(t = length(x) + (1:n.ahead))}, if (object$seasonal & !is.null(object$seasons)) {list(s = svar)}))
+    newfit <- suppressWarnings(predict.lm(object, newdata = newxreg, se.fit = se.fit, interval = "prediction", type = "response", level = 1 - alpha))
+    mu <- tsconvert(if (se.fit) {x = newfit$fit[, 1]} else {newfit[, 1]}, t = ldate)
+    if (se.fit)
+    {
+        se <- tsconvert(x = newfit$se.fit, t = ldate)
+        cil <- tsconvert(x = newfit$fit[, 2], t = ldate)
+        ciu <- tsconvert(x = newfit$fit[, 3], t = ldate)
+    }
+    tgap <- if (n.ahead == 1) {tsfreq(x)} else {tstimegap(ldate)}
+    out <- c(list(pred.time = ldate, x.timegap = tgap, x.name = tsname(object$x), pred = mu), if (se.fit) {list(se = se, cil = cil, ciu = ciu)}, list(n.ahead = n.ahead, alpha = alpha))
+    return(structure(out, class = "tspredict"))
+}
+
 ##### Model Evaluation #####
 #' Goodness of Fit of a Time Series Model
 #' @description The function `\code{tsmodeleval}` can be used to evaluate the goodness of fit of a time series model.
@@ -2347,7 +2842,7 @@ plot.tsmovav <- function(x, title = NULL, ...)
 #' @export
 tsmodeleval <- function(object)
 {
-    if (inherits(object, "tsarima") | inherits(object, "tsesm"))
+    if (inherits(object, "tsarima") | inherits(object, "tsesm") | inherits(object, "tslm"))
     {
         mfit <- object$error
         rownames(mfit) <- paste0("Training set (", object$train.prop * 100, "%)")
@@ -2390,9 +2885,10 @@ tsmodeleval <- function(object)
         mape <- mean(abs(error) / x, na.rm = TRUE) * 100
         mase <- mean(abs(error), na.rm = TRUE) / mean(abs(diff(x)), na.rm = TRUE)
         irseasonal <- c("day", "week", "min", "sec")
-        if (xfreq > 1 & !attr(x, "seasonal.cycle") %in% irseasonal) {mases <- mean(abs(error)) / mean(abs(diff(x, xfreq)))}
+        scycle <- attr(x, "seasonal.cycle")
+        mases <- if (!is.null(scycle)) {if (xfreq > 1 & !scycle %in% irseasonal) {mean(abs(error)) / mean(abs(diff(x, xfreq)))} else {NULL}} else {NULL}
         acf1 <- tsacf(error, lag.max = 1, show.plot = FALSE)
-        mfit <- as.data.frame(c(if ("aic" %in% names(object)) {list(AIC = object$aic)}, list(ME = me, RMSE = rmse, MAE = mae, MPE = mpe, MAPE = mape, MASE = mase), if (xfreq > 1 & !attr(x, "seasonal.cycle") %in% irseasonal) {list(MASE.S = mases)}, list(ACF1 = acf1$acf[2])))
+        mfit <- as.data.frame(c(if ("aic" %in% names(object)) {list(AIC = object$aic)}, list(ME = me, RMSE = rmse, MAE = mae, MPE = mpe, MAPE = mape, MASE = mase), if (!is.null(mases)) {list(MASE.S = mases)}, list(ACF1 = acf1$acf[2])))
         rownames(mfit) <- "Error"
     }
     return(mfit)
@@ -2443,6 +2939,29 @@ tstimeformat <- function(x, timegap)
     }
     xtime <- paste0(format(x, format = format1), format2)
     return(xtime)
+}
+
+##### Get Sequence of Seasons #####
+getSeasonSeq <- function(x)
+{
+    if (is.ts(x)) 
+    {
+        t1 <- tstime(x)$time[1]
+        ctype <- attr(x, "seasonal.cycle")
+    } 
+    else 
+    {
+        t1 <- x[1]
+        ctype <- tstimegap(x)
+    }
+    wdlist <- list(Sunday = 0, Monday = 1, Tuesday = 2, Wednesday = 3, Thursday = 4, Friday = 5, Saturday = 6)
+    callfunc <- if (ctype == "min") {"minute"} else if (ctype == "sec") {"second"} else if (ctype == "weekday") {"weekdays"} else {ctype}
+    season.start <- do.call(callfunc, list(t1))
+    if (ctype == "weekday") {season.start <- wdlist[season.start]}
+    season.init <- list(month = 1, week = 1, quarter = 1, day = 1, weekdays = 0, hour = 0, min = 0, sec = 0)
+    season.total <- list(month = 12, week = 52, quarter = 4, day = 365, weekdays = 6, hour = 23, min = 59, sec = 59)
+    season.seq <- c(season.start:as.numeric(season.total[ctype]), if (season.start != as.numeric(season.init[ctype])) {as.numeric(season.init[ctype]):(season.start - 1)} else {c()})
+    return(season.seq)
 }
 
 ##### Calculate Drift Term #####
