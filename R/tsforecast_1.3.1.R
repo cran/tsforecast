@@ -71,6 +71,7 @@ get_forecast <- function(object, n.ahead = 1, alpha = 0.05, show.plot = TRUE,
     log <- if (is.null(log) & class(object)[1] == "tsarima") {object$log} else {log <- FALSE}
     fc_arglist <- list(object = object, newxreg = newxreg, newxreg.est = newxreg.est, n.ahead = n.ahead, alpha = alpha, log = log)
     fc <- if ("tsarima" %in% class(object)) {do.call(predict.tsarima, fc_arglist)} else if ("tsesm" %in% class(object)) {do.call(predict.tsesm, fc_arglist)} else if ("tslm" %in% class(object)) {do.call(predict.tslm, fc_arglist)}
+    newxreg.list <- if ("tsarima" %in% class(object) & (!is.null(object$xreg))) {newxreg.list <- list(newxreg = fc$newxreg, newxreg.org = fc$newxreg.org)} else {NULL}
     if (!is.null(nobs.incl) && (nobs.incl == 0 && forecast.incl == "all")) {forecast.incl <- "forecast"}
     if (forecast.incl == "forecast")
     {
@@ -131,7 +132,7 @@ get_forecast <- function(object, n.ahead = 1, alpha = 0.05, show.plot = TRUE,
         plot.predt <- plot.date
     }
     tgap <- if (n.ahead == 1) {tsfreq(object$x.used)} else {tstimegap(plot.date)}
-    out <- c(list(x = object$x, x.used = plot.mainx, x.time = plot.maint, x.timegap = tgap, x.name = x.name, pred = plot.predx, pred.time = plot.predt, pred.name = pred.name, se = plot.se, cil = plot.cil, ciu = plot.ciu, n.ahead = n.ahead, forecast.incl = forecast.incl, log = log, alpha = alpha))
+    out <- c(list(x = object$x, x.used = plot.mainx, x.time = plot.maint, x.timegap = tgap, x.name = x.name, pred = plot.predx, pred.time = plot.predt, pred.name = pred.name, se = plot.se, cil = plot.cil, ciu = plot.ciu, n.ahead = n.ahead), if (!is.null(newxreg.list)) {newxreg.list}, list(forecast.incl = forecast.incl, log = log, alpha = alpha))
     if (show.plot)
     {
         plot_arg <- c("ylim", "title", "x.lwidth", "pred.lwidth", "x.col", "pred.col", "ci.col")
@@ -218,7 +219,7 @@ plot.tsforecast <- function(x, ylim = NULL, title = NULL, x.lwidth = 0.7, pred.l
         plot.predx <- NULL
         plot.predt <- x$pred.time
     }
-    plot.cit <- x$pred.time[-(1:length(x$x.time))]
+    plot.cit <- if (length(x$x.time) > 0) {x$pred.time[-(1:length(x$x.time))]} else {x$pred.time}
     plot.cil <- x$cil
     plot.ciu <- x$ciu
     x.name <- x$x.name
@@ -346,7 +347,7 @@ optimTimeBreaks <- function(len, frequency, numbreaks)
 #' @param order a specification of the non-seasonal part of the ARIMA model: the three integer components \eqn{(p, d, q)} are the AR order, the degree of differencing, and the MA order.
 #' @param seasonal a specification of the seasonal part of the ARIMA model \eqn{(P, D, Q)}, the seasonal AR order, the degree of seasonal differencing, and the seasonal MA order, plus the period (which defaults to \code{frequency(x)}). This should be a list with components \code{order} and \code{period}, but a specification of just a numeric vector of length 3 will be turned into a suitable list with the specification as the order. 
 #' @param xreg optional. A vector or matrix of external regressors, which must have the same number of rows as \code{x}.
-#' @param xreg.order optional. A vector, list, or numeric value of the external regressors' lags included in the model. If `\code{xreg}` has more than one column, the number of values provided in `\code{xreg.order}` will be assigned to the columns. the orders should be provided as a list with the entries in the same sequence as the columns in `\code{xreg}`. If the number of values does not match the number of columns, the values in `\code{xreg.order}` will be trimmed (too many) or repeated (too less). If omitted, no lagged version of `\code{xreg}` will be generated. Default is \code{NA}.
+#' @param xreg.order optional. A vector, list, or numeric value of the external regressors' lags included in the model. If `\code{xreg}` has more than one column, the number of values provided in `\code{xreg.order}` will be assigned to the columns. the orders should be provided as a list with the entries in the same sequence as the columns in `\code{xreg}`. If the number of values does not match the number of columns, the values in `\code{xreg.order}` will be trimmed (too many) or repeated (too less). If omitted, no lagged version of `\code{xreg}` will be generated. Default is \code{NULL}.
 #' @param include.const logical. Indicates if the ARMA model should include a mean/intercept term. The default is \code{TRUE} for non-differenced series. For ARIMA models with differencing, it may fail to estimate the standard errors.
 #' @param log optional. A logical value indicating whether the forecasted values are log-transformed and should be inverted back to the original series scale. If the object is an \code{tsarima} model and this parameter is omitted, the value will be taken over by the settings of the model given in object. Default is \code{NULL} here.
 #' @param train.prop a numerical value specifying the proportion of training data in the series. The value must be between 0 and 1. Default is \code{1}.
@@ -435,10 +436,12 @@ optimTimeBreaks <- function(len, frequency, numbreaks)
 #' @importFrom stats arima
 #' @export
 tsarima <- function(x, order = c(0L, 0L, 0L), seasonal = list(order = c(0L, 0L, 0L), period = NA), 
-                    xreg = NULL, xreg.order = NA, include.const = TRUE, log = FALSE, train.prop = 1, arch.test = FALSE, 
+                    xreg = NULL, xreg.order = NULL, include.const = TRUE, log = FALSE, train.prop = 1, arch.test = FALSE, 
                     transform.pars = TRUE, fixed = NULL, init = NULL, method = c("CSS-ML", "ML", "CSS"), SSinit = c("Gardner1980", "Rossignol2011"),
                     optim.method = "BFGS", optim.control = list(), kappa = 1e+06)
 {
+    orgmatch <- match.call()
+    arglist <- as.list(orgmatch)[-1]
     if (train.prop > 1 | train.prop < 0)
     {
         warning("Proportion of training data must be between 0 and 1. Automatically set to 1.")
@@ -451,6 +454,7 @@ tsarima <- function(x, order = c(0L, 0L, 0L), seasonal = list(order = c(0L, 0L, 
     series <- deparse1(substitute(x))
     if (!is.null(xreg)) 
     {
+        if (is.null(xreg.order)) {xreg.order <- 0}
         extreg <- xreg_prep(xreg = xreg, xreg.order = xreg.order)
         xreg_model <- extreg$xreg_model
         xnam <- extreg$xnam
@@ -697,6 +701,7 @@ summary.tsarima <- function(object, digits = max(3L, getOption("digits") - 3L), 
 #' @importFrom stats predict
 predict.tsarima <- function (object, n.ahead = 1L, newxreg = NULL, newxreg.est = c("none", "x", "auto.arima"), se.fit = TRUE, alpha = 0.05, log = NULL, ...)
 {
+    newxreg.org <- newxreg
     newxreg.est <- match.arg(newxreg.est)
     xreg.order <- if (!is.list(object$xreg.order)) {list(object$xreg.order)} else {object$xreg.order}
     numorder <- length(unlist(xreg.order))
@@ -714,12 +719,12 @@ predict.tsarima <- function (object, n.ahead = 1L, newxreg = NULL, newxreg.est =
         }
         else 
         {
-            if (is.null(newxreg))  # if newxreg not provides and no xreg.order in the model
+            for (j in 1:ncxreg)
             {
-                for (j in 1:ncxreg)
+                origxregj <- if (is.matrix(object$xreg) | is.data.frame(object$xreg)) {object$xreg[, j]} else {object$xreg}
+                if (!is.ts(origxregj)) {origxregj <- tsconvert(x = origxregj, t = object$x.time.used)} 
+                if (is.null(newxreg))  # if newxreg not provides and no xreg.order in the model
                 {
-                    origxregj <- if (is.matrix(object$xreg) | is.data.frame(object$xreg)) {object$xreg[, j]} else {object$xreg}
-                    if (!is.ts(origxregj)) {origxregj <- tsconvert(x = origxregj, t = object$x.time.used)} 
                     if (newxreg.est == "none")
                     {
                         newcdata <- matrix(0, n.ahead, 1)
@@ -732,20 +737,26 @@ predict.tsarima <- function (object, n.ahead = 1L, newxreg = NULL, newxreg.est =
                     {
                         newcdata <- stats::predict(forecast::auto.arima(origxregj, max.p = 5, max.q = 5, max.P = 2, max.Q = 2, max.d = 2, max.D = 2, start.p = 0, start.q = 0, start.P = 0, start.Q = 0), n.ahead = n.ahead)$pred
                     }
-                    newcdata <- tsconvert(x = c(origxregj, newcdata), t = c(object$x.time.used, ldate))
-                    newxreg <- cbind(newxreg, newcdata)
                 }
+                else
+                {
+                    newcdata <- newxreg[, j]
+                }
+                newcdata <- tsconvert(x = c(origxregj, newcdata), t = c(object$x.time.used, ldate))
+                if (!exists("tempxreg")) {tempxreg <- numeric(length(newcdata))}
+                tempxreg <- cbind(tempxreg, newcdata)
             }
             if (needlag == FALSE)
             {
-                newxreg <- as.matrix(newxreg)
+                newxreg <- as.matrix(tempxreg[, -1])
             }
             else
             {
-                newxreg <- xreg_prep(xreg = newxreg, xreg.order = object$xreg.order)$xreg_model
+                newxreg <- xreg_prep(xreg = tempxreg[, -1], xreg.order = object$xreg.order)$xreg_model
             }
             ncxreg <- ncol(newxreg)
             newxreg <- newxreg[c(object$x.time.used, ldate) >= ldate[1], ]
+            colnames(newxreg) <- colnames(object$xreg.used)
         }
     }
     else
@@ -819,7 +830,7 @@ predict.tsarima <- function (object, n.ahead = 1L, newxreg = NULL, newxreg.est =
         }
     }
     tgap <- if (n.ahead == 1) {tsfreq(object$x)} else {tstimegap(ldate)}
-    return(structure(c(list(pred.time = ldate, x.timegap = tgap, x.name = tsname(object$x)), out, list(n.ahead = n.ahead, log = userlog, alpha = alpha)), class = "tspredict"))
+    return(structure(c(list(pred.time = ldate, x.timegap = tgap, x.name = tsname(object$x)), out, list(newxreg = newxreg, newxreg.org = newxreg.org, n.ahead = n.ahead, log = userlog, alpha = alpha)), class = "tspredict"))
 }
 
 ##### Generate Exponential Smoothing #####
